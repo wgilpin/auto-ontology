@@ -2,8 +2,7 @@
 import numpy as np
 from numpy import ndarray
 from sklearn.pipeline import Pipeline
-from transformers import AutoTokenizer, pipeline, TFDistilBertModel, logging
-from scipy.spatial.distance import cosine
+from transformers import AutoTokenizer, pipeline, logging
 from timer import timer
 
 logging.set_verbosity_error()
