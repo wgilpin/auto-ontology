@@ -22,6 +22,5 @@ def transformer_embedding(pipe: Pipeline, inp: str) -> ndarray:
     return features
 
 
-@timer
 def embed(pipe: Pipeline, text: str) -> ndarray:
     return transformer_embedding(pipe, text)
