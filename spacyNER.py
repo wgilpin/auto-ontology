@@ -87,10 +87,10 @@ def get_spacy_NER_data(length: int = 10) -> list:
 
 
 # %%
-for s in get_spacy_NER_data():
-    spacy.displacy.render(s['nlp'], style='ent')
-    print(f"\"{s['sentence']}\"")
-    for c in s['chunks']:
-        print(f"\"{c['entity']}\"({c['entity'].label_}) in \"{c['chunk']}\"")
-    print("--------------------------------------------------------------")
+# for s in get_spacy_NER_data():
+#     spacy.displacy.render(s['nlp'], style='ent')
+#     print(f"\"{s['sentence']}\"")
+#     for c in s['chunks']:
+#         print(f"\"{c['entity']}\"({c['entity'].label_}) in \"{c['chunk']}\"")
+#     print("--------------------------------------------------------------")
 # %%
