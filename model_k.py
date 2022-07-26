@@ -5,8 +5,9 @@ from tensorflow import keras as k
 from tensorflow.keras.layers import Dense, Input
 
 # %%
-def build_model(input_dims, latent_dims):
 
+
+def build_model(input_dims, latent_dims):
 
     input_layer = k.layers.Input(shape=(input_dims,))
 
@@ -39,6 +40,8 @@ def compile_ae_model():
     return ae_model
 
 # %%
+
+
 def create_layer(config: dict) -> Dense:
     """
     Create a layer from a config dictionary.
@@ -46,10 +49,15 @@ def create_layer(config: dict) -> Dense:
         - n: number of units
         - act: activation function
     """
-    return Dense(units=config["n"], activation=config["act"])
-    
+    return Dense(
+        units=config["n"],
+        activation=config["act"],
+        kernel_regularizer='l1')
+
 # %%
-def create_models_from_params(layers, latent_layer, output_fn, optimizer_fn, loss_fn):
+
+
+def create_models_from_params(layers, latent_layer, output_fn, optimizer_fn, loss_fn, verbose=1):
     """
     Create a model with the given parameters.
     - input_dims: the number of input dimensions
@@ -78,7 +86,8 @@ def create_models_from_params(layers, latent_layer, output_fn, optimizer_fn, los
     model = k.Model(inputs=ml[0], outputs=[ml[-1]])
 
     model.compile(optimizer_fn, loss_fn)
-    print(model.summary())
+    if verbose:
+        print(model.summary())
     return model
 
 # %%
