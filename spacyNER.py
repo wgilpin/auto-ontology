@@ -24,7 +24,8 @@ def get_sample(length: int = 10) -> list:
             words.append(fl.split(" ")[0])
 
     sample = list(filter(lambda s: s[0].isalpha(), lines))
-    sample = sample[0:length]
+    if length > 0:
+        sample = sample[0:length]
     return sample
 
 # %%
