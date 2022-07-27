@@ -1,22 +1,22 @@
 # %%
-from wandb.keras import WandbCallback
-import wandb
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.layers import Dense, Input
-from tensorflow.keras.models import Sequential, Model
-from tensorflow import convert_to_tensor
+# from wandb.keras import WandbCallback
+# import wandb
+# from tensorflow.keras.optimizers import Adam
+# from tensorflow.keras.layers import Dense, Input
+# from tensorflow.keras.models import Sequential, Model
+# from tensorflow import convert_to_tensor
 import numpy as np
+import matplotlib.pyplot as plt
 from transformers import TFDistilBertModel
+from tensorflow.keras.callbacks import EarlyStopping
+from progress.bar import Bar
 from extract_bert_features import embed, make_pipe
 from model_k import compile_ae_model, create_models_from_params
 from scipy.spatial.distance import cosine
-from tensorflow.keras.callbacks import EarlyStopping
-from progress.bar import Bar
 import pandas as pd
 
 from timer import timer
 
-import matplotlib.pyplot as plt
 
 from spacyNER import get_spacy_NER_data
 
@@ -157,7 +157,7 @@ train_x, test_x = test_train_split(0.8)
 
 # %%
 model = compile_ae_model()
-model.fit(x_train, x_train, epochs=100, batch_size=100, shuffle=True)
+model.fit(train_x, train_x, epochs=100, batch_size=100, shuffle=True)
 
 
 # %%
