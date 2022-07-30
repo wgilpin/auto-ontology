@@ -1,22 +1,23 @@
 # %%
-# from wandb.keras import WandbCallback
-# import wandb
-# from tensorflow.keras.optimizers import Adam
-# from tensorflow.keras.layers import Dense, Input
-# from tensorflow.keras.models import Sequential, Model
-# from tensorflow import convert_to_tensor
+from wandb.keras import WandbCallback
+import wandb
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.layers import Dense, Input
+from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.utils import plot_model
+from tensorflow import convert_to_tensor
 import numpy as np
-import matplotlib.pyplot as plt
 from transformers import TFDistilBertModel
+from extract_bert_features import embed, make_pipe
+from model_k import create_model
+from scipy.spatial.distance import cosine
 from tensorflow.keras.callbacks import EarlyStopping
 from progress.bar import Bar
-from extract_bert_features import embed, make_pipe
-from model_k import compile_ae_model, create_models_from_params
-from scipy.spatial.distance import cosine
 import pandas as pd
 
 from timer import timer
 
+import matplotlib.pyplot as plt
 
 from spacyNER import get_spacy_NER_data
 
@@ -156,11 +157,6 @@ def test_train_split(frac=0.8):
 train_x, test_x = test_train_split(0.8)
 
 # %%
-model = compile_ae_model()
-model.fit(train_x, train_x, epochs=100, batch_size=100, shuffle=True)
-
-
-# %%
 # plot loss
 # summarize history for loss
 def plot_loss(history) -> None:
@@ -173,28 +169,38 @@ def plot_loss(history) -> None:
     plt.show()
 
 
-# %%
-
-
 # %% [markdown]
 # grid search
 
 # %%
 default = {
-    "layers": [
+    "ae": [
         {"n": 768, "act": "relu"},
-        {"n": 400, "act": "relu"},
+        {"n": 500, "act": "relu"},
+        {"n": 2000, "act": "relu"},
     ],
-    "latent": {"n": 128, "act": "relu"},
+    "repr": [
+        {"n": 2000, "act": "relu"},
+        {"n": 768, "act": "relu"},
+        {"n": 768, "act": "relu"},
+    ],
+    "latent": {"n": 160, "act": "relu"},
     "output": "sigmoid",
-    "optimizer": "adam",
+    "opt": "adam",
     "loss": "mse",
-    "learning_rate": 0.001,
-    "batch_size": 256
+    "lr": 0.001,
+    "batch": 256
 }
 
 grid = [
-    #sigmoid
+    # big
+    {
+        "name": "4 deep big - 160 latent",
+        **default,
+
+        "output": "tanh",
+    },
+    # sigmoid
     # {
     #     "name": "1 deep - 160 latent",
     #     **default,
@@ -253,22 +259,15 @@ grid = [
     #     "latent": {"n": 160, "act": "relu"},
     #     "output": "tanh",
     # },
-    # big
-    {
-        "name": "4 deep big - 160 latent",
-        **default,
-        "layers": [
-            {"n": 768, "act": "relu"},
-            {"n": 2000, "act": "relu"},
-            {"n": 500, "act": "relu"},
-            {"n": 500, "act": "relu"},
-        ],
-        "latent": {"n": 160, "act": "relu"},
-        "output": "tanh",
-    },
-    
+
+
 ]
 
+
+# %%
+model = create_model(grid[0])
+plot_model(model, show_dtype=True, 
+            show_layer_names=True, show_shapes=True)
 
 # %%
 
@@ -277,25 +276,20 @@ early_stopping_cb = EarlyStopping(
 
 for config in grid:
     train_x, test_x = test_train_split()
-    model = create_models_from_params(
-        layers=config["layers"],
-        latent_layer=config["latent"],
-        output_fn=config["output"],
-        optimizer_fn=config["optimizer"],
-        loss_fn=config["loss"],
-        verbose=0)
+    model = create_model(config)
     print(f"Training {config['name']}")
-    model.summary()
+    plot_model(model, show_dtype=True, 
+                       show_layer_names=True, show_shapes=True)
     history = model.fit(
         train_x,
         train_x,
         validation_data=(test_x, test_x),
         epochs=2000,
-        batch_size=config["batch_size"],
+        batch_size=config["batch"],
         shuffle=True,
         verbose=0,
         callbacks=[early_stopping_cb],
-        )
+    )
     print(f"...Loss => {history.history['loss'][-1]}")
     plot_loss(history)
 
@@ -312,7 +306,7 @@ test_batches = [1024]
 test_history = []
 for latent_dim in test_dims:
     for batch_size in test_batches:
-        model = create_models_from_params(
+        model = create_model(
             layers=[
                 {"n": 768, "act": "relu"},
                 # {"n": 512, "act": "relu"},
@@ -353,6 +347,64 @@ print(
     f"batch:{best_loss['batch_size']} => {best_loss['loss']}")
 
 # %%
+import os
+import numpy as np
+from keras.initializers import VarianceScaling
+from tensorflow.keras.optimizers import SGD
+from DEC import DEC
+from metrics import acc
+
+save_dir = "./model"
+if not os.path.exists(save_dir):
+    os.makedirs(save_dir)
+
+# load dataset
+from datasets import load_reuters
+x, y = load_reuters()
+n_clusters = len(np.unique(y))
+
+init = 'glorot_uniform'
+pretrain_optimizer = 'adam'
+# setting parameters
+
+update_interval = 30
+pretrain_epochs = 50
+init = VarianceScaling(scale=1. / 3., mode='fan_in',
+                        distribution='uniform')  # [-limit, limit], limit=sqrt(1./fan_in)
+pretrain_optimizer = SGD(lr=1, momentum=0.9)
+
+
+# %%
+# parser.add_argument('--batch_size', default=256, type=int)
+# parser.add_argument('--maxiter', default=2e4, type=int)
+# parser.add_argument('--pretrain_epochs', default=None, type=int)
+# parser.add_argument('--update_interval', default=None, type=int)
+# parser.add_argument('--tol', default=0.001, type=float)
+# parser.add_argument('--ae_weights', default=None)
+# parser.add_argument('--save_dir', default='results')
+
+# %%
+# prepare the DEC model
+dec = DEC(dims=[x.shape[-1], 500, 500, 2000, 10], n_clusters=n_clusters, init=init)
+
+if os.path.exists(os.path.join(save_dir, 'ae_weights.h5')):
+    print("Loading weights")
+    dec.autoencoder.load_weights(os.path.join(save_dir, 'ae_weights.h5'))
+else:
+    print("Training weights")
+    dec.pretrain(x=x, y=y, optimizer=pretrain_optimizer,
+                    epochs=pretrain_epochs, batch_size=256,
+                    save_dir='./results')
+
+dec.model.summary()
+dec.compile(optimizer=SGD(0.01, 0.9), loss='kld')
+
+
+# %%
+%%timeit 
+y_pred = dec.fit(x, y=y, tol=0.001, maxiter=2e4, batch_size=256,
+    update_interval=update_interval, save_dir=save_dir)
+print('acc:', acc(y, y_pred))
 
 
 
