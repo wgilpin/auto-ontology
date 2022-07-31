@@ -30,25 +30,8 @@ early_stopping_cb = EarlyStopping(
     monitor='loss', patience=3, verbose=1, min_delta=0.001)
 
 # %%
-ae_model = compile_ae_model()
 
-# # some fake data
-# fake_train_x = np.random.rand(1000, 768)
-# fake_test_x = np.random.rand(500, 768)
-# fake_train_y = np.random.rand(1000, 1)
-# fake_test_y = np.random.rand(500, 1)
-# ae_model.fit(
-#     x=fake_train_x,
-#     y=fake_train_y,
-#     epochs=5,
-#     batch_size=100,
-#     shuffle=True,
-#     validation_data=(fake_test_x, fake_test_y))
-
-
-# %%
-
-
+# test
 def test():
     z = ['The brown fox jumped over the dog',
          'The ship sank in the Atlantic Ocean',
@@ -67,11 +50,7 @@ def test():
     print(f"distance 1-3 {distance13}")
 
 # %%
-
-
-# %%
 # create 1 training item per entity, given a token radius
-
 
 @timer
 def create_training_data_per_entity(
@@ -80,6 +59,8 @@ def create_training_data_per_entity(
     """
     Creates training data for the autoencoder.
     """
+    from tqdm import tqdm
+
     print(f"Create Training Data for {length} items, radius {radius}")
     # get spacy data
     spacy_data = get_spacy_NER_data(length)
@@ -87,28 +68,25 @@ def create_training_data_per_entity(
 
     # get embedding data
     res = []
-    bar = Bar('Processing', max=len(spacy_data))
-    for s in spacy_data:
-        for chunk in s["chunks"]:
-            start_token = max(chunk["entity"].start-radius, 0)
-            end_token = min(chunk["entity"].end+radius, len(s["nlp"]))
-            short_sentence = s["nlp"][start_token:end_token]
-            res.append({
-                "sentence": short_sentence,
-                "chunk": str(chunk["chunk"]),
-                "label": chunk["entity"].label_,
-                "embedding": embed(emb_pipe, str(short_sentence))
-            })
-            bar.next()
-    bar.finish()
+    with tqdm(total=len(spacy_data)) as pbar:
+        for s in spacy_data:
+            for chunk in s["chunks"]:
+                start_token = max(chunk["entity"].start-radius, 0)
+                end_token = min(chunk["entity"].end+radius, len(s["nlp"]))
+                short_sentence = s["nlp"][start_token:end_token]
+                res.append({
+                    "sentence": short_sentence,
+                    "chunk": str(chunk["chunk"]),
+                    "label": chunk["entity"].label,
+                    "label_id": chunk["entity"].label_,
+                    "embedding": embed(emb_pipe, str(short_sentence))
+                })
+                pbar.update(1)
     # average all the embeddings in a sample, dropping 1st (CLS)
     for r in res:
         r["embedding"] = np.mean(r["embedding"][1:], axis=0)
     return res
 
-
-
-# %%
 
 
 # %%
@@ -129,6 +107,9 @@ emb_df = pd.DataFrame(x_train_np)
 merged_df.drop(columns=['embedding'], inplace=True)
 df = pd.concat([merged_df, emb_df], axis=1)
 
+df['label'] = np.unique(df['label'], return_inverse = True)[1]
+
+
 print(df.shape)
 # save data to csv
 df.to_csv("./data/training_df.csv", index=False)
@@ -139,22 +120,26 @@ df.head()
 # 
 
 # %%
+import pandas as pd
+
 df = pd.read_csv("./data/training_df.csv")
-
-
 # train df has only the embeddings
-df.head()
 
 def test_train_split(frac=0.8):
     training_data = df.sample(frac=frac, random_state=42)
     testing_data = df.drop(training_data.index)
-    train_x_df = training_data.drop(columns=['chunk', 'label', 'sentence'])
-    test_x_df = testing_data.drop(columns=['chunk', 'label', 'sentence'])
+    train_y_df = np.array(training_data["label"])
+    test_y_df = np.array(testing_data["label"])
+    train_x_df = np.array(training_data.drop(columns=['chunk', 'label', 'label_id', 'sentence']))
+    test_x_df = np.array(testing_data.drop(columns=['chunk', 'label', 'label_id', 'sentence']))
     print(f"Full df: {df.shape}")
     print(f"Train df: {train_x_df.shape}")
     print(f"Test df: {test_x_df.shape}")
-    return train_x_df, test_x_df
-train_x, test_x = test_train_split(0.8)
+    return train_x_df, test_x_df, train_y_df, test_y_df
+
+
+# %%
+train_x, test_x, train_y, test_y = test_train_split(0.8)
 
 # %%
 # plot loss
@@ -346,6 +331,9 @@ print(
     f"Best latent dims: {best_loss['dims']}, "
     f"batch:{best_loss['batch_size']} => {best_loss['loss']}")
 
+# %% [markdown]
+# # DEC approach
+
 # %%
 import os
 import numpy as np
@@ -354,14 +342,20 @@ from tensorflow.keras.optimizers import SGD
 from DEC import DEC
 from metrics import acc
 
-save_dir = "./model"
+save_dir = "./results"
 if not os.path.exists(save_dir):
     os.makedirs(save_dir)
 
 # load dataset
-from datasets import load_reuters
-x, y = load_reuters()
+dataset = "conll"
+if dataset == "reuters":
+    from datasets import load_reuters
+    x, y = load_reuters()
+else:
+    x, test_x, y, test_y = test_train_split(0.99)
+print(f"{dataset} dataset: {x.shape} x:{type(x)}, y:{type(y)}")
 n_clusters = len(np.unique(y))
+print(f"{n_clusters} clusters")
 
 init = 'glorot_uniform'
 pretrain_optimizer = 'adam'
@@ -372,16 +366,6 @@ pretrain_epochs = 50
 init = VarianceScaling(scale=1. / 3., mode='fan_in',
                         distribution='uniform')  # [-limit, limit], limit=sqrt(1./fan_in)
 pretrain_optimizer = SGD(lr=1, momentum=0.9)
-
-
-# %%
-# parser.add_argument('--batch_size', default=256, type=int)
-# parser.add_argument('--maxiter', default=2e4, type=int)
-# parser.add_argument('--pretrain_epochs', default=None, type=int)
-# parser.add_argument('--update_interval', default=None, type=int)
-# parser.add_argument('--tol', default=0.001, type=float)
-# parser.add_argument('--ae_weights', default=None)
-# parser.add_argument('--save_dir', default='results')
 
 # %%
 # prepare the DEC model
