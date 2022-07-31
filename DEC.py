@@ -40,15 +40,19 @@ def autoencoder(dims, act='relu', init='glorot_uniform'):
 
     # internal layers in encoder
     for i in range(n_stacks-1):
-        h = Dense(dims[i + 1], activation=act, kernel_initializer=init, name='encoder_{i}')(h)
+        h = Dense(dims[i + 1], activation=act,
+                  kernel_initializer=init, name=f'encoder_{i}')(h)
 
     # hidden layer
-    h = Dense(dims[-1], kernel_initializer=init, name=f'encoder_{n_stacks - 1}')(h)  # hidden layer, features are extracted from here
+    # hidden layer, features are extracted from here
+    h = Dense(dims[-1], kernel_initializer=init,
+              name=f'encoder_{n_stacks - 1}')(h)
 
     y = h
     # internal layers in decoder
     for i in range(n_stacks-1, 0, -1):
-        y = Dense(dims[i], activation=act, kernel_initializer=init, name='decoder_%d' % i)(y)
+        y = Dense(dims[i], activation=act,
+                  kernel_initializer=init, name=f'decoder_{i}')(y)
 
     # output
     y = Dense(dims[0], kernel_initializer=init, name='decoder_0')(y)
@@ -88,7 +92,8 @@ class ClusteringLayer(Layer):
         assert len(input_shape) == 2
         input_dim = input_shape[1]
         self.input_spec = InputSpec(dtype=K.floatx(), shape=(None, input_dim))
-        self.clusters = self.add_weight(shape=(self.n_clusters, input_dim), initializer='glorot_uniform', name='clusters')
+        self.clusters = self.add_weight(shape=(
+            self.n_clusters, input_dim), initializer='glorot_uniform', name='clusters')
         if self.initial_weights is not None:
             self.set_weights(self.initial_weights)
             del self.initial_weights
@@ -102,7 +107,8 @@ class ClusteringLayer(Layer):
         Return:
             q: student's t-distribution, or soft labels for each sample. shape=(n_samples, n_clusters)
         """
-        q = 1.0 / (1.0 + (K.sum(K.square(K.expand_dims(inputs, axis=1) - self.clusters), axis=2) / self.alpha))
+        q = 1.0 / (1.0 + (K.sum(K.square(K.expand_dims(inputs,
+                   axis=1) - self.clusters), axis=2) / self.alpha))
         q **= (self.alpha + 1.0) / 2.0
         q = K.transpose(K.transpose(q) / K.sum(q, axis=1))
         return q
@@ -135,10 +141,12 @@ class DEC(object):
         self.autoencoder, self.encoder = autoencoder(self.dims, init=init)
 
         # prepare DEC model
-        clustering_layer = ClusteringLayer(self.n_clusters, name='clustering')(self.encoder.output)
+        clustering_layer = ClusteringLayer(
+            self.n_clusters, name='clustering')(self.encoder.output)
         self.model = Model(inputs=self.encoder.input, outputs=clustering_layer)
 
-    def pretrain(self, x, y=None, optimizer='adam', epochs=200, batch_size=256, save_dir='results/temp'):
+    def pretrain(self, x, y=None, optimizer='adam', epochs=200, batch_size=256,
+                 save_dir='results/temp'):
         print('...Pretraining...')
         self.autoencoder.compile(optimizer=optimizer, loss='mse')
 
@@ -168,7 +176,8 @@ class DEC(object):
 
         # begin pretraining
         t0 = time()
-        self.autoencoder.fit(x, x, batch_size=batch_size, epochs=epochs, callbacks=cb)
+        self.autoencoder.fit(x, x, batch_size=batch_size,
+                             epochs=epochs, callbacks=cb)
         print('Pretraining time: %ds' % round(time() - t0))
         self.autoencoder.save_weights(save_dir + '/ae_weights.h5')
         print('Pretrained weights are saved to %s/ae_weights.h5' % save_dir)
@@ -180,7 +189,8 @@ class DEC(object):
     def extract_features(self, x):
         return self.encoder.predict(x)
 
-    def predict(self, x):  # predict cluster labels using the output of clustering layer
+    def predict(self, x):
+        # predict cluster labels using the output of clustering layer
         q = self.model.predict(x, verbose=0)
         return q.argmax(1)
 
@@ -205,13 +215,15 @@ class DEC(object):
         kmeans = KMeans(n_clusters=self.n_clusters, n_init=20)
         y_pred = kmeans.fit_predict(self.encoder.predict(x))
         y_pred_last = np.copy(y_pred)
-        self.model.get_layer(name='clustering').set_weights([kmeans.cluster_centers_])
+        self.model.get_layer(name='clustering').set_weights(
+            [kmeans.cluster_centers_])
 
         # Step 2: deep clustering
         # logging file
         import csv
         logfile = open(save_dir + '/dec_log.csv', 'w', encoding='utf-8')
-        logwriter = csv.DictWriter(logfile, fieldnames=['iter', 'acc', 'nmi', 'ari', 'loss'])
+        logwriter = csv.DictWriter(
+            logfile, fieldnames=['iter', 'acc', 'nmi', 'ari', 'loss'])
         logwriter.writeheader()
 
         loss = 0
@@ -220,7 +232,8 @@ class DEC(object):
         for ite in range(int(maxiter)):
             if ite % update_interval == 0:
                 q = self.model.predict(x, verbose=0)
-                p = self.target_distribution(q)  # update the auxiliary target distribution p
+                # update the auxiliary target distribution p
+                p = self.target_distribution(q)
 
                 # evaluate the clustering performance
                 y_pred = q.argmax(1)
@@ -229,12 +242,15 @@ class DEC(object):
                     nmi = np.round(metrics.nmi(y, y_pred), 5)
                     ari = np.round(metrics.ari(y, y_pred), 5)
                     loss = np.round(loss, 5)
-                    logdict = dict(iter=ite, acc=acc, nmi=nmi, ari=ari, loss=loss)
+                    logdict = dict(iter=ite, acc=acc, nmi=nmi,
+                                   ari=ari, loss=loss)
                     logwriter.writerow(logdict)
-                    print('Iter %d: acc = %.5f, nmi = %.5f, ari = %.5f' % (ite, acc, nmi, ari), ' ; loss=', loss)
+                    print('Iter %d: acc = %.5f, nmi = %.5f, ari = %.5f' %
+                          (ite, acc, nmi, ari), ' ; loss=', loss)
 
                 # check stop criterion
-                delta_label = np.sum(y_pred != y_pred_last).astype(np.float32) / y_pred.shape[0]
+                delta_label = np.sum(y_pred != y_pred_last).astype(
+                    np.float32) / y_pred.shape[0]
                 y_pred_last = np.copy(y_pred)
                 if ite > 0 and delta_label < tol:
                     print('delta_label ', delta_label, '< tol ', tol)
@@ -245,14 +261,17 @@ class DEC(object):
             # train on batch
             # if index == 0:
             #     np.random.shuffle(index_array)
-            idx = index_array[index * batch_size: min((index+1) * batch_size, x.shape[0])]
+            idx = index_array[index *
+                              batch_size: min((index+1) * batch_size, x.shape[0])]
             loss = self.model.train_on_batch(x=x[idx], y=p[idx])
             index = index + 1 if (index + 1) * batch_size <= x.shape[0] else 0
 
             # save intermediate model
             if ite % save_interval == 0:
-                print('saving model to:', save_dir + '/DEC_model_' + str(ite) + '.h5')
-                self.model.save_weights(save_dir + '/DEC_model_' + str(ite) + '.h5')
+                print('saving model to:', save_dir +
+                      '/DEC_model_' + str(ite) + '.h5')
+                self.model.save_weights(
+                    save_dir + '/DEC_model_' + str(ite) + '.h5')
 
             ite += 1
 
@@ -297,7 +316,7 @@ if __name__ == "__main__":
     update_interval = 30
     pretrain_epochs = 50
     init = VarianceScaling(scale=1. / 3., mode='fan_in',
-                            distribution='uniform')  # [-limit, limit], limit=sqrt(1./fan_in)
+                           distribution='uniform')  # [-limit, limit], limit=sqrt(1./fan_in)
     pretrain_optimizer = SGD(lr=1, momentum=0.9)
 
     if args.update_interval is not None:
@@ -306,7 +325,8 @@ if __name__ == "__main__":
         pretrain_epochs = args.pretrain_epochs
 
     # prepare the DEC model
-    dec = DEC(dims=[x.shape[-1], 500, 500, 2000, 10], n_clusters=n_clusters, init=init)
+    dec = DEC(dims=[x.shape[-1], 500, 500, 2000, 10],
+              n_clusters=n_clusters, init=init)
 
     if args.ae_weights is None:
         dec.pretrain(x=x, y=y, optimizer=pretrain_optimizer,
