@@ -2,6 +2,11 @@
 # Perform standard imports
 import spacy
 from os import path
+import numpy as np 
+from extract_bert_features import embed, make_pipe
+from transformers import TFDistilBertModel
+
+from timer import timer
 
 nlp = spacy.load('en_core_web_sm')
 
@@ -88,10 +93,44 @@ def get_spacy_NER_data(length: int = 10) -> list:
 
 
 # %%
-# for s in get_spacy_NER_data():
-#     spacy.displacy.render(s['nlp'], style='ent')
-#     print(f"\"{s['sentence']}\"")
-#     for c in s['chunks']:
-#         print(f"\"{c['entity']}\"({c['entity'].label_}) in \"{c['chunk']}\"")
-#     print("--------------------------------------------------------------")
-# %%
+@timer
+def create_training_data_per_entity_spacy(
+        length: int = 10,
+        radius: int = 7,
+        entity_filter: list[str] = []) -> list:
+    """
+    Creates training data for the autoencoder.
+    """
+    from tqdm import tqdm
+    print("Making pipe")
+    
+    emb_pipe = make_pipe('distilbert-base-uncased', TFDistilBertModel)
+
+    print(
+        f"Create Training Data for {length if length > 0 else 'all'} items, radius {radius}")
+    # get spacy data
+    spacy_data = get_spacy_NER_data(length)
+    print(f"Created NER Data for {len(spacy_data)} items")
+
+    # get embedding data
+    res = []
+    with tqdm(total=len(spacy_data)) as pbar:
+        for s in spacy_data:
+            for chunk in s["chunks"]:
+                if len(entity_filter) == 0 or chunk["entity"].label_ in entity_filter:
+                    start_token = max(chunk["entity"].start-radius, 0)
+                    end_token = min(chunk["entity"].end+radius, len(s["nlp"]))
+                    short_sentence = s["nlp"][start_token:end_token]
+                    res.append({
+                        "sentence": short_sentence,
+                        "chunk": str(chunk["chunk"]),
+                        "label": chunk["entity"].label,
+                        "label_id": chunk["entity"].label_,
+                        "embedding": embed(emb_pipe, str(short_sentence))
+                    })
+                pbar.update(1)
+    print(f"Created {len(res)} training items")
+    # average all the embeddings in a sample, dropping 1st (CLS)
+    for r in res:
+        r["embedding"] = np.mean(r["embedding"][1:], axis=0)
+    return res
