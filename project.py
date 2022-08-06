@@ -19,7 +19,7 @@ from timer import timer
 
 import matplotlib.pyplot as plt
 
-from spacyNER import create_training_data_per_entity_spacy
+from spacyNER import training_data_per_entity_spacy
 
 
 # %%
@@ -159,6 +159,9 @@ plot_model(model, show_dtype=True,
 
 # %%
 
+
+# %%
+
 early_stopping_cb = EarlyStopping(
     monitor='loss', patience=15, verbose=1, min_delta=0.0001)
 
@@ -238,91 +241,108 @@ print(
 # # DEC approach
 
 # %%
-import os
-import numpy as np
-from keras.initializers import VarianceScaling
-from tensorflow.keras.optimizers import SGD
-from DEC import DEC
-from metrics import acc
-from data import get_training_data
+from train_DEC import run_model
 
-entity_types=['PER','ORG','LOC', 'MISC']
-
-save_dir = "./results"
-if not os.path.exists(save_dir):
-    os.makedirs(save_dir)
-
-# load dataset
-dataset = "conll"
-if dataset == "reuters":
-    from datasets_deep import load_reuters
-    x, y = load_reuters()
-else:
-    x, test_x, y, test_y = get_training_data(save_dir="results",
-                                             count=10000,
-                                             source="fewNERD",
-                                             radius=5,
-                                             fraction=0.99,
-                                             entity_filter=entity_types,
-                                             force_recreate=False)
-x.shape
+# %% [markdown]
+# ## Spacy fit on CoNLL
 
 # %%
-def train_DEC(x, y):
-    print(f"{dataset} dataset: {x.shape} x:{type(x)}, y:{type(y)}")
-    assert(len(np.unique(y)) <= len(entity_types))
-    n_clusters = len(np.unique(y))
-    print(f"{n_clusters} clusters")
+run_model("conll")
 
-    init = 'glorot_uniform'
-    pretrain_optimizer = 'adam'
-    # setting parameters
-
-    pretrain_epochs = 50
-    init = VarianceScaling(scale=1. / 3., mode='fan_in',
-                        distribution='uniform')  # [-limit, limit], limit=sqrt(1./fan_in)
-    pretrain_optimizer = SGD(learning_rate=1, momentum=0.9)
-
-    # prepare the DEC model
-    dec = DEC(dims=[x.shape[-1], 500, 500, 2000, 10], n_clusters=n_clusters, init=init)
-
-    if os.path.exists(os.path.join(save_dir, 'ae_weights.h5')):
-        print("Loading weights")
-        dec.autoencoder.load_weights(os.path.join(save_dir, 'ae_weights.h5'))
-    else:
-        print("Training weights")
-        dec.pretrain(x=x, y=y, optimizer=pretrain_optimizer,
-                        epochs=pretrain_epochs, batch_size=256,
-                        save_dir='./results')
-
-    dec.model.summary()
-    dec.compile(optimizer=SGD(0.01, 0.9), loss='kld')
-
-    return dec
-
-dec = train_DEC(x, y)
 
 # %%
-%%timeit 
-update_interval = 30
-y_pred = dec.fit(x, y=y, tol=0.001, maxiter=2e4, batch_size=256,
-    update_interval=update_interval, save_dir=save_dir)
-print('acc:', acc(y, y_pred))
-
+run_model("conll")
 
 # %% [markdown]
 # 
 # # fewNERD data
 
 # %%
-import numpy as np
-from timer import timer
-from fewNERD_data import create_training_data_per_entity_fewNERD
+run_model("fewNERD")
+
+# %%
+from data import pre_embed
+
+
+df = pre_embed("fewNERD")
+
+# %%
+df.head()
 
 
 # %%
-training_data = create_training_data_per_entity_fewNERD(length=50, radius=10, entity_filter=[1,2,3,4])
-print("Training data created")
+from spacyNER import training_data_from_embeds_spacy
+    
+training_data_from_embeds_spacy(df[0:5],0)[1]
+
+
+# %% [markdown]
+# # fewNERD with Spacy NER
+
+# %%
+run_model("fewNERD_spacy", 10000, force_recreate=True, radius=0)
+
+# %% [markdown]
+# # DEC+Spacy
+
+# %%
+%reload_ext autoreload
+%autoreload 2
+
+# compare
+import numpy as np
+import pandas as pd 
+import os
+from spacyNER import get_training_data_spacy
+from data_conll import get_sample_conll_hf
+from train_DEC import entity_types
+
+size = 10000
+filename = f"./data/conll_spacy_{size}.pkl"
+if os.path.exists(filename):
+    print(f"Loading {filename}")
+    trg = pd.read_pickle(filename)
+else:
+    sample_conll = get_sample_conll_hf(size)
+
+    trg = get_training_data_spacy(sample_conll, 0, entity_filter=entity_types)
+    trg.to_pickle(filename)
+
+print(f'Done: {trg.shape}')
+
+
+# %%
+from data import test_train_split
+
+x, _, y, _ = test_train_split(trg)
+print(f"x: {x.shape}, y: {y.shape}")
+
+# %%
+from train_DEC import train_DEC
+from metrics import acc
+
+# %%timeit 
+dec = train_DEC(x, y)
+update_interval = 30
+y_pred = dec.fit(x, y=y, tol=0.001, maxiter=2e4, batch_size=512,
+    update_interval=update_interval, save_dir='./data')
+
+print('acc:', acc(y, y_pred))
+
+# %%
+import matplotlib.pyplot as plt
+def plot_loss(history) -> None:
+    plt.plot(history['loss'])
+    plt.plot(history['acc'])
+    plt.plot(history['delta_label'])
+    plt.title('model loss')
+    plt.ylabel('validation')
+    plt.xlabel('epoch')
+    plt.legend(['loss', 'accuracy', 'delta'], loc='upper left')
+    plt.show()
+
+# %%
+plot_loss(dec.history)
 
 # %%
 

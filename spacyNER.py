@@ -1,37 +1,26 @@
 # %%
 # Perform standard imports
+import pandas as pd
 import spacy
-from os import path
-import numpy as np 
-from extract_bert_features import embed, make_pipe
+import numpy as np
+from extract_bert_features import embed, get_pipe
 from transformers import TFDistilBertModel
+from tqdm import tqdm
+from data_conll import get_sample_conll
+
 
 from timer import timer
+from logging_helper import setup_logging
 
-nlp = spacy.load('en_core_web_sm')
+import logging
 
 # %%
+# Setup
+if (not setup_logging(logfile_file="project_log.log")):
+    logging.info("Failed to setup logging, aborting.")
 
 
-def get_sample(length: int = 10) -> list:
-    test_file = path.join("./data/conll/test.txt")
-    with open(test_file, encoding="utf-8") as f:
-        file_lines = f.readlines()
-
-    lines = []
-    words = []
-    for fl in file_lines:
-        if fl == "\n":
-            # blank line is separator
-            lines.append(" ".join(words))
-            words = []
-        else:
-            words.append(fl.split(" ")[0])
-
-    sample = list(filter(lambda s: s[0].isalpha(), lines))
-    if length > 0:
-        sample = sample[0:length]
-    return sample
+nlp = spacy.load('en_core_web_sm')
 
 # %%
 
@@ -85,7 +74,7 @@ def get_spacy_NER_data(length: int = 10) -> list:
         - entity: spacy Entity
     """
     sentences = []
-    for l in get_sample(length):
+    for l in get_sample_conll(length):
         doc = nlp(l)
         merged = merge_chunks_ents(doc)
         sentences.append({'sentence': l, 'nlp': doc, 'chunks': merged})
@@ -94,17 +83,19 @@ def get_spacy_NER_data(length: int = 10) -> list:
 
 # %%
 @timer
-def create_training_data_per_entity_spacy(
+def training_data_per_entity_spacy(
         length: int = 10,
         radius: int = 7,
-        entity_filter: list[str] = []) -> list:
+        entity_filter: list[str] = None) -> list:
     """
     Creates training data for the autoencoder.
     """
-    from tqdm import tqdm
+    if entity_filter is None:
+        entity_filter = []
+
     print("Making pipe")
-    
-    emb_pipe = make_pipe('distilbert-base-uncased', TFDistilBertModel)
+
+    emb_pipe = get_pipe('distilbert-base-uncased', TFDistilBertModel)
 
     print(
         f"Create Training Data for {length if length > 0 else 'all'} items, radius {radius}")
@@ -114,23 +105,109 @@ def create_training_data_per_entity_spacy(
 
     # get embedding data
     res = []
-    with tqdm(total=len(spacy_data)) as pbar:
-        for s in spacy_data:
-            for chunk in s["chunks"]:
-                if len(entity_filter) == 0 or chunk["entity"].label_ in entity_filter:
-                    start_token = max(chunk["entity"].start-radius, 0)
-                    end_token = min(chunk["entity"].end+radius, len(s["nlp"]))
-                    short_sentence = s["nlp"][start_token:end_token]
-                    res.append({
-                        "sentence": short_sentence,
-                        "chunk": str(chunk["chunk"]),
-                        "label": chunk["entity"].label,
-                        "label_id": chunk["entity"].label_,
-                        "embedding": embed(emb_pipe, str(short_sentence))
-                    })
-                pbar.update(1)
+    for s in tqdm(spacy_data):
+
+        for chunk in s["chunks"]:
+            start_token = max(chunk["entity"].start-radius, 0)
+            end_token = min(chunk["entity"].end+radius, len(s["nlp"]))
+            short_sentence = s["nlp"][start_token:end_token]
+            res.append({
+                "sentence": short_sentence,
+                "chunk": str(chunk["chunk"]),
+                "label": chunk["entity"].label_,
+                "embedding": embed(emb_pipe, str(short_sentence))
+                })
     print(f"Created {len(res)} training items")
-    # average all the embeddings in a sample, dropping 1st (CLS)
-    for r in res:
-        r["embedding"] = np.mean(r["embedding"][1:], axis=0)
     return res
+
+# %%
+# Create training data from pre-embedded sentences
+
+def training_data_from_embeds_spacy(
+        embeds: pd.DataFrame,
+        radius: int = 0,
+        entity_filter: list[str] = None,
+        length: int = 10,
+        ) -> list:
+    """
+    Creates training data for the autoencoder.
+    """
+    if entity_filter is None:
+        entity_filter = []
+
+    print(
+        f"Create Training Data for {length if length > 0 else len(embeds)}"
+        f" items, radius {radius}")
+    # get spacy data
+    embeds["spacy_data"] = embeds["sentence"][0:length-1].apply(nlp)
+    print(f"Created NER Data for {len(embeds)} items")
+
+    # get embedding data
+    res = []
+    for _, row in tqdm(embeds.iterrows()):
+        s = row["spacy_data"]
+        # displacy.render(s, style="ent")
+        words = str(s.doc).split()
+        for ent in s.ents:
+            if len(entity_filter) == 0 or ent.label_ in entity_filter:
+                start_token = max(ent.start-radius, 0)
+                end_token = min(ent.end+radius, len(words))
+                short_sentence = ' '.join(words[start_token:end_token+1])
+                res.append({
+                    "sentence": short_sentence,
+                    "chunk": ' '.join(words[ent.start:ent.end+1]),
+                    "label": ent.label,
+                    "label_id": ent.label_,
+                    "embedding": np.mean(row["embeddings"][start_token+1:end_token+1], axis=0)
+                })
+    print(f"Created {len(res)} training items")
+    return res
+
+@timer
+def get_training_data_spacy(sents: list[str],
+                            radius: int,
+                            embed_sentence_level: bool=True,
+                            length: int = 10,
+                            entity_filter: list[str] = None) -> list:
+    """
+    Creates training data for the autoencoder given a list of sentences
+    """
+    if entity_filter is None:
+        entity_filter = []
+
+    logging.info(
+        "Create Training Data for %s items, radius %s",
+        length if length > 0 else 'all',
+        radius)
+
+    emb_pipe = get_pipe()
+    # get embedding data
+    res = []
+    for sent in tqdm(sents):
+        embeddings = None
+        s = nlp(sent)
+        for ent in s.ents:
+            if len(entity_filter) == 0 or ent.label_ in entity_filter:
+                if embed_sentence_level and embeddings is None:
+                    embeddings = embed(emb_pipe, sent)
+                start_token = max(ent.start-radius, 0)
+                end_token = min(ent.end+radius, len(s.doc))
+                short_sentence = str(s.doc[start_token:end_token])
+                if not embed_sentence_level:
+                    embeddings = embed(emb_pipe, short_sentence)
+                    embedding = embeddings[0]
+                else:
+                    embedding = np.mean(embeddings[start_token+1:end_token+1], axis=0)
+                res.append({
+                    "sentence": sent,
+                    "chunk": short_sentence,
+                    "label": ent.label,
+                    "label_id": ent.label_,
+                    "embedding": embedding,
+                })
+    emb_df = pd.DataFrame(np.stack([m["embedding"] for m in res]))
+    rest_df = pd.DataFrame(res).drop('embedding', axis=1)
+    df = pd.concat([emb_df, rest_df], axis=1)
+    df['label'] = np.unique(df['label'], return_inverse=True)[1]
+    logging.info("Created %s training items", len(res))
+    return df
