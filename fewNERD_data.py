@@ -1,10 +1,21 @@
 # %%
 # Perform standard imports
+import os
 from datasets import load_dataset
+import pandas as pd
 from tqdm import tqdm
 import numpy as np
+from extract_bert_features import get_pipe, embed
 
 from timer import timer
+from logging_helper import setup_logging
+
+import logging
+
+# %%
+# Setup logging
+if (not setup_logging(logfile_file="project_log.log")):
+    logging.info("Failed to setup logging, aborting.")
 
 # %%
 
@@ -30,7 +41,7 @@ def read_fewNERD(count: int) -> list[dict]:
     """
 
     dataset = load_dataset("DFKI-SLT/few-nerd", "supervised")
-    print('Dataset loaded')
+    logging.info('Dataset loaded')
 
     entity_types = get_entity_types()
     result = []
@@ -49,7 +60,7 @@ def read_fewNERD(count: int) -> list[dict]:
             sentence = ' '.join([tup[0] for tup in filtered])
             filtered.append(('<EOS>', 'O'))
             
-            # print(f'"{sentence}"')
+            logging.debug(sentence)
 
             entities = []
             ent_label_id = 0
@@ -69,7 +80,9 @@ def read_fewNERD(count: int) -> list[dict]:
                             'label': entity_types[ent_label_id],
                             'text': ent_text,
                         })
-                        # print(f"entity: {ent_text} ({ent_label})")
+                        logging.debug("entity: %s (%s)",
+                                     ent_text,
+                                     entity_types[ent_label_id])
 
                     ent_label_id = tup[1]
                     ent_start = tok_idx
@@ -85,11 +98,48 @@ def read_fewNERD(count: int) -> list[dict]:
                 })
             pbar.update(1)
             
-    print('Dataset processed')
+    logging.info('Dataset processed')
+    return result
+
+def read_fewNERD_sentences(count: int=0, verbose=1) -> list[str]:
+    """
+    Reads the fewNERD data and returns a list of sentences.
+    -count: number of sentences to read. <=0 means all.
+    -verbose: 0=silent, 1=progress bar, 2=verbose
+    """
+
+    dataset = load_dataset("DFKI-SLT/few-nerd", "supervised")
+    if verbose>0:
+        logging.info('Dataset feNERD loaded')
+
+    result = []
+    if count < 1:
+        count = len(dataset['train']['tokens'])
+    tokens = dataset['train']['tokens'][0:count-1]
+
+    pbar = None
+    if verbose>0:
+        pbar = tqdm(total=len(tokens))
+
+    for idx in range(count-1):
+        sentence = ""
+
+        filtered = list(filter(lambda tup: tup[0].isalnum(), tokens[idx]))
+        sentence = ' '.join(filtered)
+        result.append(sentence)
+
+        if verbose==2:
+            logging.debug(sentence)
+        if pbar is not None:
+            pbar.update(1)
+
+    if verbose>0:
+        logging.info('Dataset processed: %s sentences', len(result))
+
     return result
 
 @timer
-def create_training_data_per_entity_fewNERD(
+def training_data_per_entity_fewNERD(
         length: int = 10,
         radius: int = 7,
         entity_filter: list[str] = []) -> list:
@@ -97,40 +147,44 @@ def create_training_data_per_entity_fewNERD(
     Creates training data for the autoencoder.
     """
     from tqdm import tqdm
-    print("Making pipe")
-    from extract_bert_features import embed, make_pipe
+    logging.info("Making pipe")
+    from extract_bert_features import embed, get_pipe
     from transformers import TFDistilBertModel
-    emb_pipe = make_pipe('distilbert-base-uncased', TFDistilBertModel)
+    emb_pipe = get_pipe('distilbert-base-uncased', TFDistilBertModel)
 
-    print(
+    logging.info(
         f"Create Training Data for {length if length > 0 else 'all'} items, radius {radius}")
     # get spacy data
     fewNERD_data = read_fewNERD(length)
 
-    print(f"Created NER Data for {len(fewNERD_data)} items")
+    logging.info("Created NER Data for %s items", len(fewNERD_data))
 
     # get embedding data
     res = []
     with tqdm(total=len(fewNERD_data)) as pbar:
         for s in fewNERD_data:
+            if radius == 0:
+                embeddings = embed(emb_pipe, str(s['sentence']))
             for chunk in s["entities"]:
                 if len(entity_filter) == 0 or chunk["label"] in entity_filter:
                     start_token = max(chunk["start"]-radius, 0)
-                    end_token = min(chunk["end"]+radius, len(s["words"]))
-                    short_sentence = ' '.join(s['words'][start_token:end_token])
+                    end_token = min(chunk["end"]+radius+1, len(s["words"]))
+                    short_sentence = ' '.join(s['words'][start_token:end_token+1])
+                    if radius>0:
+                        embeddings = embed(emb_pipe, str(short_sentence))
+                        embedding = np.mean(embeddings[1:], axis=0)
+                    else:
+                        sentence = s["sentence"]
+                        embedding = np.mean(embeddings[start_token+1:end_token+1], axis=0)
+                        
                     res.append({
-                        "sentence": short_sentence,
+                        "sentence": sentence,
                         "chunk": short_sentence,
                         "label": chunk["label"],
                         "label_id": chunk["label_id"],
-                        "embedding": embed(emb_pipe, str(short_sentence))
+                        "embedding": embedding,
                     })
             pbar.update(1)
-    print(f"Created {len(res)} training items")
+    logging.info("Created %s training items", len(res))
+    return res
 
-    # average all the embeddings in a sample, dropping 1st (CLS)
-    with tqdm(total=len(res)) as pbar:
-        for r in res:
-            r["embedding"] = np.mean(r["embedding"][1:], axis=0)
-            pbar.update(1)
-        return res
