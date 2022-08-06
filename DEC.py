@@ -139,6 +139,7 @@ class DEC(object):
         self.n_clusters = n_clusters
         self.alpha = alpha
         self.autoencoder, self.encoder = autoencoder(self.dims, init=init)
+        self.history = {"loss": [], "acc": [], "delta_label": []}
 
         # prepare DEC model
         clustering_layer = ClusteringLayer(
@@ -247,10 +248,14 @@ class DEC(object):
                     logwriter.writerow(logdict)
                     print('Iter %d: acc = %.5f, nmi = %.5f, ari = %.5f' %
                           (ite, acc, nmi, ari), ' ; loss=', loss)
+                    self.history['loss'].append(loss)
+                    self.history['acc'].append(acc)
 
                 # check stop criterion
                 delta_label = np.sum(y_pred != y_pred_last).astype(
                     np.float32) / y_pred.shape[0]
+                self.history['delta_label'].append(delta_label)
+                
                 y_pred_last = np.copy(y_pred)
                 if ite > 0 and delta_label < tol:
                     print('delta_label ', delta_label, '< tol ', tol)
@@ -267,11 +272,11 @@ class DEC(object):
             index = index + 1 if (index + 1) * batch_size <= x.shape[0] else 0
 
             # save intermediate model
-            if ite % save_interval == 0:
-                print('saving model to:', save_dir +
-                      '/DEC_model_' + str(ite) + '.h5')
-                self.model.save_weights(
-                    save_dir + '/DEC_model_' + str(ite) + '.h5')
+            # if ite % save_interval == 0:
+            #     print('saving model to:', save_dir +
+            #           '/DEC_model_' + str(ite) + '.h5')
+            #     self.model.save_weights(
+            #         save_dir + '/DEC_model_' + str(ite) + '.h5')
 
             ite += 1
 
