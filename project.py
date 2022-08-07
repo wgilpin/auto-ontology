@@ -335,14 +335,252 @@ def plot_loss(history) -> None:
     plt.plot(history['loss'])
     plt.plot(history['acc'])
     plt.plot(history['delta_label'])
+    plt.plot(history['correct_label'])
+
     plt.title('model loss')
     plt.ylabel('validation')
     plt.xlabel('epoch')
-    plt.legend(['loss', 'accuracy', 'delta'], loc='upper left')
+    plt.legend(['loss', 'accuracy', 'delta', 'correct'], loc='upper left')
     plt.show()
 
 # %%
+
 plot_loss(dec.history)
+
+# %%
+n = 1000
+comp = y[0:n]==y_pred[0:n]
+print (comp.sum(), comp.sum()/n)
+
+# %% [markdown]
+# # Deep Clustering
+
+# %%
+%reload_ext autoreload
+%autoreload 2
+
+# compare
+import numpy as np
+import pandas as pd 
+import os
+from spacyNER import get_training_data_spacy
+from data_conll import get_sample_conll_hf
+from train_DEC import entity_types
+
+size = 100
+filename = f"./data/conll_spacy_{size}.pkl"
+if os.path.exists(filename):
+    print(f"Loading {filename}")
+    trg = pd.read_pickle(filename)
+else:
+    sample_conll = get_sample_conll_hf(size)
+
+    trg = get_training_data_spacy(sample_conll, 0, entity_filter=entity_types)
+    trg.to_pickle(filename)
+
+print(f'Done: {trg.shape}')
+
+# %%
+from data import test_train_split
+
+x, _, y, _ = test_train_split(trg)
+print(f"x: {x.shape}, y: {y.shape}")
+
+# %%
+%reload_ext autoreload
+%autoreload 2
+from model_tf2 import ClusterNetwork
+
+reuters = ClusterNetwork(
+    latent_dim = 10,
+    latent_weight = 0.001,
+    noise_factor = 0.4,
+    keep_prob = 1.0,
+    alpha1=20,
+    alpha2=1,
+    optimizer='adam',
+    learning_rate=0.001,
+    n_clusters=4,
+).train(x, y, train_batch_size=100, pretrain_epochs=5, train_epochs=50)
+
+
+# %% [markdown]
+# # TF2 from scratch
+
+# %%
+from tensorflow import keras as k
+import tensorflow as tf
+import numpy as np
+
+# %%
+from random import shuffle
+from data import test_train_split
+
+def load_data():
+    size = 100
+    filename = f"./data/conll_spacy_{size}.pkl"
+    if os.path.exists(filename):
+        print(f"Loading {filename}")
+        trg = pd.read_pickle(filename)
+    else:
+        sample_conll = get_sample_conll_hf(size)
+
+        trg = get_training_data_spacy(sample_conll, 0, entity_filter=entity_types)
+        trg.to_pickle(filename)
+
+    # shuffle
+    trg = trg.sample(frac=1)
+
+    x, _, y, _ = test_train_split(trg)
+    print(f"x: {x.shape}, y: {y.shape}")
+
+
+
+# %%
+
+
+# %%
+embeddings_dims = 768
+latent_dims = 256
+
+input_layer = k.Input(shape=(embeddings_dims,))
+
+enc1 = tf.keras.layers.Dense(500)(input_layer)
+enc2 = tf.keras.layers.Dense(500)(enc1)
+enc3 = tf.keras.layers.Dense(2000)(enc2)
+
+enc_X_out_logits = tf.keras.layers.Dense(latent_dims)(enc3)
+encoder = tf.nn.sigmoid(enc_X_out_logits)
+encoder_model = tf.keras.Model(inputs=input_layer, outputs=encoder)
+encoder_model.summary()
+
+
+# %%
+
+dec1 = tf.keras.layers.Dense(2000)(enc_X_out_logits)
+dec2 = tf.keras.layers.Dense(500)(dec1)
+dec4 = tf.keras.layers.Dense(500)(dec2)
+
+dec_X_out_logits = tf.keras.layers.Dense(embeddings_dims)(dec4)
+decoder = tf.nn.sigmoid(dec_X_out_logits)
+ae_model = k.models.Model(inputs=input_layer, outputs=decoder)
+ae_model.summary()
+
+
+# %%
+
+lat1 = tf.keras.layers.Dense(2000)(enc_X_out_logits)
+lat2 = tf.keras.layers.Dense(500)(lat1)
+lat3 = tf.keras.layers.Dense(500)(lat2)
+lat4 = tf.keras.layers.Dense(500)(lat3)
+latent_network = tf.keras.layers.Dense(latent_dims)(lat4)
+latent_model = k.models.Model(inputs=input_layer, outputs=latent_network)
+latent_model.summary()
+
+model = k.models.Model(inputs=input_layer, outputs=[decoder, latent_network])
+
+# %%
+@tf.function
+def pairwise_sqd_distance(X, batch_size):
+
+    tiled = tf.tile(tf.expand_dims(X, axis=1),
+                    tf.stack([1, x.shape[0], 1]))
+    tiled_trans = tf.transpose(tiled, perm=[1, 0, 2])
+    diffs = tiled - tiled_trans
+    sqd_dist_mat = tf.reduce_sum(tf.square(diffs), axis=2)
+    tf.print(sqd_dist_mat, [sqd_dist_mat])
+
+    return sqd_dist_mat
+
+# %%
+@tf.function
+def make_q(z, batch_size, alpha):
+
+    sqd_dist_mat = pairwise_sqd_distance(z, batch_size)
+    q = tf.pow((1 + sqd_dist_mat/alpha), -(alpha+1)/2)
+    q = tf.linalg.set_diag(q, tf.zeros(shape=[batch_size]))
+    q = q / tf.reduce_sum(q, axis=0, keepdims=True)
+    #q = 0.5*(q + tf.transpose(q))
+    q = tf.clip_by_value(q, 1e-10, 1.0)
+
+    return q
+
+# %%
+@tf.function
+def latent_model(z_enc, training):
+    z = latent_network(z_enc, training)
+
+    p = make_q(z_enc, batch_size, alpha=alpha1)
+    q = make_q(z, batch_size, alpha=alpha2)
+
+    latent_loss = tf.reduce_sum(-(tf.multiply(p, tf.math.log(q))))
+
+
+# %%
+@tf.function
+def ae_model_iter(X, training, rec_loss="mse"):
+
+        # Add noise to the input to feed to Denoising encoder model.
+        X_noisy = X + noise_factor * \
+            tf.random.normal(shape=tf.shape(X), mean=0.0,
+                             stddev=1.0, dtype=tf.float64)
+        X_noisy = tf.clip_by_value(X, 0.0, 1.0)
+
+        # Pass through encoder and decoder.
+        z = encoder(X_noisy, training)
+        X_out_logits, X_out = decoder(z, training)
+
+        # Calculate Reconstruction loss.
+        if rec_loss == 'mse':
+            reconstr_loss = tf.reduce_mean(
+                tf.math.squared_difference(X, X_out), axis=1)
+        else:
+            reconstr_loss = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(
+                labels=X, logits=X_out_logits), axis=1)
+        reconstr_loss = tf.reduce_mean(reconstr_loss)
+
+        return reconstr_loss, z
+        
+
+# %%
+def batches(x, y, n):
+    print(f"batches: {n} of {x.shape}, {y.shape}")
+    for i in range(0, (y.shape[0] // n)-1):
+        print(f"batch {i*n},{(i*n)+n}")
+        yield x[i*n:(i*n)+n], y[i*n:(i*n)+n]
+
+# %%
+losses = []
+alpha1 = 20
+alpha2 = 1
+rec_weight = 1.0
+latent_weight = 0.01
+batch_size = 32
+for batch_idx, (x_batch, y_batch) in enumerate(batches(x, y, n=batch_size)):
+    with tf.GradientTape() as tape:
+        y_reconst = ae_model(x_batch, training=True)
+        z_enc = encoder_model(x_batch, training=True)
+        l = latent_model(x_batch, training=True)
+
+        p = make_q(l, batch_size, alpha=alpha1)
+        q = make_q(z_enc, batch_size, alpha=alpha2)
+        latent_loss = tf.reduce_sum(-(tf.multiply(p, tf.compat.v1.log(q))))
+        reconstr_loss = tf.reduce_mean(
+            tf.math.squared_difference(x_batch.astype('float32'), y_reconst), axis=1)
+
+        # Joint loss.
+        joint_loss = rec_weight * reconstr_loss +\
+                     latent_weight * latent_loss
+        losses.append(joint_loss)
+        tf.py_function(some_function, losses, [tf.float32]) # where the last argument
+        
+    gradients = tape.gradient(joint_loss, tape.watched_variables())
+    # apply gradients for all variables watched by the tape
+    opt.apply_gradients((grad, var)
+                        for (grad, var) in zip(gradients, tape.watched_variables())
+                        if grad is not None)
+
+print(losses[-1][0])
 
 # %%
 
