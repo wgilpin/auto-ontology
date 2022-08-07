@@ -139,7 +139,11 @@ class DEC(object):
         self.n_clusters = n_clusters
         self.alpha = alpha
         self.autoencoder, self.encoder = autoencoder(self.dims, init=init)
-        self.history = {"loss": [], "acc": [], "delta_label": []}
+        self.history = {
+            "loss": [],
+            "acc": [],
+            "delta_label": [],
+            "correct_label": []}
 
         # prepare DEC model
         clustering_layer = ClusteringLayer(
@@ -251,6 +255,10 @@ class DEC(object):
                     self.history['loss'].append(loss)
                     self.history['acc'].append(acc)
 
+                correct_label = np.sum(y_pred == y).astype(
+                    np.float32) / y_pred.shape[0]
+                self.history['correct_label'].append(correct_label)
+                
                 # check stop criterion
                 delta_label = np.sum(y_pred != y_pred_last).astype(
                     np.float32) / y_pred.shape[0]
