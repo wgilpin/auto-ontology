@@ -19,9 +19,6 @@ import logging
 if (not setup_logging(logfile_file="project_log.log")):
     logging.info("Failed to setup logging, aborting.")
 
-
-nlp = spacy.load('en_core_web_sm')
-
 # %%
 
 # remove stop words
@@ -73,6 +70,8 @@ def get_spacy_NER_data(length: int = 10) -> list:
         - chunk: str
         - entity: spacy Entity
     """
+    nlp = spacy.load('en_core_web_sm')
+
     sentences = []
     for l in get_sample_conll(length):
         doc = nlp(l)
@@ -132,6 +131,8 @@ def training_data_from_embeds_spacy(
     """
     Creates training data for the autoencoder.
     """
+    nlp = spacy.load('en_core_web_sm')
+
     if entity_filter is None:
         entity_filter = []
 
@@ -179,6 +180,8 @@ def get_training_data_spacy(sents: list[str],
         "Create Training Data for %s items, radius %s",
         length if length > 0 else 'all',
         radius)
+
+    nlp = spacy.load('en_core_web_sm')
 
     emb_pipe = get_pipe()
     # get embedding data
