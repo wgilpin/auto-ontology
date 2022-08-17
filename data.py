@@ -1,19 +1,28 @@
 # %%
 
 import os
+import pickle
+import logging
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
+from typing import Tuple
 
-from transformers import TFDistilBertModel
-from spacyNER import training_data_per_entity_spacy, training_data_from_embeds_spacy
+from imblearn.over_sampling import RandomOverSampler
+from spacyNER import (TrainingDataSpacy,
+                      training_data_per_entity_spacy,
+                      training_data_from_embeds_spacy)
+from data_conll import get_sample_conll_hf
+
+
 from fewNERD_data import training_data_per_entity_fewNERD, read_fewNERD_sentences
 
 from extract_bert_features import get_pipe, embed
 
 from logging_helper import setup_logging
 
-import logging
+# process all entities
+entity_types = [] #'PER', 'PERSON', 'ORG', 'LOC', 'GPE', 'MISC']
 
 # %%
 # Setup logging
@@ -27,6 +36,8 @@ if (not setup_logging(logfile_file="project_log.log")):
 # logging.error("Error message")
 # logging.critical("Critical message")
 # %%
+
+
 def read_conll_dataset(filename: str) -> list:
     """
     Reads the CONLL dataset.
@@ -39,7 +50,8 @@ def read_conll_dataset(filename: str) -> list:
                 data.append(line.split())
     return data
 
-def parse_conll(data: list)->list[str]:
+
+def parse_conll(data: list) -> list[str]:
     """
         returns list of sentences
     """
@@ -51,8 +63,8 @@ def parse_conll(data: list)->list[str]:
         if toks[0] == '.':
             # end of sentence
             sentences.append({
-                        'sentence': ' '.join(sentence),
-                        'tokens': sentence})
+                'sentence': ' '.join(sentence),
+                'tokens': sentence})
             sentence = []
             continue
         if toks[0][0].isalnum():
@@ -60,8 +72,9 @@ def parse_conll(data: list)->list[str]:
             sentence.append(toks[0])
 
     return sentences
-    
+
 # %%
+
 
 def join_punctuation(seq, characters=".,;?!'')-"):
     # https://stackoverflow.com/a/15950837/2870929
@@ -83,7 +96,15 @@ def join_punctuation(seq, characters=".,;?!'')-"):
 #
 # CREATE TRAINING DATA
 
+
 def test_train_split(df, frac=1.0):
+    """
+    Returns a balanced train and test split of the dataframe
+    -X train
+    -X test
+    -X train
+    -Y test
+    """
     df = df.dropna()
     if frac < 1.0:
         training_data = df.sample(frac=frac, random_state=42)
@@ -92,34 +113,43 @@ def test_train_split(df, frac=1.0):
         test_x_df = np.array(testing_data.drop(
             columns=['chunk', 'label', 'label_id', 'sentence']))
         train_y_df = np.array(training_data["label"])
-        train_x_df = np.array(training_data.drop(
-            columns=['chunk', 'label', 'label_id', 'sentence']))
     else:
         training_data = df
         test_x_df = None
         test_y_df = None
+        train_x_df = training_data
     train_y_df = np.array(training_data["label"])
-    train_x_df = np.array(training_data.drop(
-        columns=['chunk', 'label', 'label_id', 'sentence']))
     logging.info("Full df: %s", df.shape)
-    logging.info("Train df: %s", train_x_df.shape)
+    
     if test_x_df:
         logging.info("Test df: %s", test_x_df.shape)
 
+    # see balance
+    unique, counts = np.unique(train_y_df, return_counts=True)
+    uniques = np.column_stack((unique, counts)) 
+    print("Train data balance:")
+    print(uniques)
+
     # oversample for balance
-    from imblearn.over_sampling import RandomOverSampler
     ros = RandomOverSampler(random_state=0)
     x_train_bal, y_train_bal = ros.fit_resample(train_x_df, train_y_df)
-    return x_train_bal, test_x_df, y_train_bal, test_y_df
+    train_x_strings = x_train_bal['chunk']
+    x_train_bal = np.array(x_train_bal.drop(
+        columns=['chunk', 'label', 'label_id', 'sentence']))
+        
+    logging.info("Train df: %s", train_x_df.shape)
+    return x_train_bal, test_x_df, y_train_bal, test_y_df, train_x_strings
+
 
 def get_sentences_from_conll():
     data = read_conll_dataset("data/conll/train.txt")
     data = parse_conll(data)
     return [line['sentence'] for line in data]
 
+
 def pre_embed(dataset: str,
-              save_dir: str="./data",
-              length: int=0,
+              save_dir: str = "./data",
+              length: int = 0,
               force_recreate=False) -> pd.DataFrame:
     """
     give a dataset name
@@ -127,7 +157,7 @@ def pre_embed(dataset: str,
     Returns a DataFrame
         """
     filename = os.path.join(save_dir,
-        f"embeddings_{length}:{dataset}.pck")
+                            f"embeddings_{length}:{dataset}.pck")
     if not force_recreate and os.path.exists(filename):
         logging.info("Loading %s", dataset)
         df = pd.read_pickle(filename)
@@ -143,7 +173,10 @@ def pre_embed(dataset: str,
         sentences = read_fewNERD_sentences(length)
     result = []
     logging.info("Making pipe")
+
+    from transformers import TFDistilBertModel
     emb_pipe = get_pipe('distilbert-base-uncased', TFDistilBertModel)
+
     logging.info("Made pipe")
     save_every = 2000
     start = 43*save_every
@@ -155,7 +188,8 @@ def pre_embed(dataset: str,
         result.append({'sentence': sentence, 'embeddings': embeddings})
         if (i+1) % save_every == 0:
             df = pd.DataFrame(result)
-            intermediate_filename = os.path.join(save_dir,
+            intermediate_filename = os.path.join(
+                save_dir,
                 f"embeddings_{length}:{i//save_every}_{dataset}.pck")
             df.to_pickle(intermediate_filename)
             result = []
@@ -163,7 +197,8 @@ def pre_embed(dataset: str,
     # read back
     dfs = []
     for i in range(last):
-        intermediate_filename = os.path.join(save_dir,
+        intermediate_filename = os.path.join(
+            save_dir,
             f"embeddings_{length}:{i}_{dataset}.pck")
         dfs.append(pd.read_pickle(intermediate_filename))
 
@@ -172,12 +207,13 @@ def pre_embed(dataset: str,
 
     # save data to single pickle
     full_filename = os.path.join(save_dir,
-        f"embeddings_{length}:{dataset}.pck")
+                                 f"embeddings_{length}:{dataset}.pck")
     df.to_pickle(full_filename)
 
     logging.info("Saved %s", filename)
     print("DONE")
     return df
+
 
 def get_training_data(
         save_dir: str,
@@ -187,7 +223,8 @@ def get_training_data(
         count: int = 0,
         force_recreate: bool = False,
         entity_filter: list[str] = []) -> list:
-    filename = os.path.join(save_dir,
+    filename = os.path.join(
+        save_dir,
         f"training_data_radius_{source}_{count if count > 0 else 'all'}_{radius}.csv")
 
     # create data if not already done
@@ -206,16 +243,16 @@ def get_training_data(
         elif source == "fewNERD":
             logging.info("Reading fewNERD dataset")
             merged = training_data_per_entity_fewNERD(length=count,
-                                                    radius=radius,
-                                                    entity_filter=entity_filter)
+                                                      radius=radius,
+                                                      entity_filter=entity_filter)
         elif source == "fewNERD_spacy":
             logging.info("Reading fewNERD dataset for spacy")
             df = pre_embed("fewNERD")
             if count > 0:
                 df = df[0:count]
             merged = training_data_from_embeds_spacy(df,
-                                                    radius=radius,
-                                                    entity_filter=entity_filter)
+                                                     radius=radius,
+                                                     entity_filter=entity_filter)
         logging.info("Created entries: %s", len(merged))  # create full DF
 
         x_train_np = np.stack([m["embedding"] for m in merged])
@@ -234,3 +271,55 @@ def get_training_data(
         logging.info("Saved %s", filename)
 
     return test_train_split(df, fraction)
+
+
+def load_data(size: int, entity_filter: list=None, get_text: bool=False) -> Tuple[pd.DataFrame, pd.DataFrame, dict]:
+    """
+    Load data from disk
+    Returns:
+        -x: training data
+        -y: training labels
+        -mapping: mapping from label id to string
+    """
+    if entity_filter is None:
+        entity_filter = []
+
+    filename_data = f"./data/conll_spacy_{size}.pkl"
+    filename_mapping = f"./data/conll_spacy_{size}_map.pkl"
+    if os.path.exists(filename_data) and os.path.exists(filename_mapping):
+        print(f"Loading {filename_data}")
+        trg = pd.read_pickle(filename_data)
+        with open(filename_mapping, 'rb') as handle:
+            mapping = pickle.load(handle)
+    else:
+        print("Creating data")
+        sample_conll = get_sample_conll_hf(size)
+
+        embedder = TrainingDataSpacy(
+            embed_sentence_level=True)
+        trg, mapping = embedder.get_training_data_spacy(sents=sample_conll)
+        trg.to_pickle(filename_data)
+        with open(filename_mapping, 'wb') as handle:
+            pickle.dump(mapping, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    if entity_filter:
+        # entity_filter to id list
+        mapping = {k:v for k,v in mapping.items() if v in entity_filter}
+        allowed_y_list = [k for k,v in mapping.items() if v in entity_filter]
+        trg = trg[trg['label'].isin(allowed_y_list)]
+
+
+    print(f'Done: {trg.shape}')
+
+    x, _, y, _, strings = test_train_split(trg)
+    print(f"x: {x.shape}, y: {y.shape}")
+    
+    filtered_map = {}
+    y_unq = np.unique(y)
+    for idx, y_val in enumerate(y_unq):
+        filtered_map[idx] = mapping[y_val]
+    y = np.unique(y, return_inverse = True)[1]
+    print(filtered_map)
+
+    return x, y, filtered_map, strings if get_text else None
+
