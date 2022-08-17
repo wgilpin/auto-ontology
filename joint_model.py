@@ -17,8 +17,8 @@ from data import load_data
 size = 10000
 max_iter = 140
 # entities = ['ORG', 'GPE', 'PERSON', ]  # , 'NORP',  ]
-x, y, mapping, strings = load_data(size, entity_filter=None, get_text=True)
-n_clusters = len(np.unique(y))+1
+x, y, mapping, strings = load_data(size, get_text=True)
+n_clusters = len(np.unique(y))+10
 print(x.shape)
 
 # %%
@@ -268,24 +268,26 @@ import matplotlib.pyplot as plt
 
 print ("CLUSTERS")
 predicted = pd.DataFrame({'text':strings, 'y_pred':y_pred, 'y_true':y})
-for l, m in mapping.items():
-    y_pred_for_key = predicted[predicted['y_pred']==l]
-    true_label_n = y_pred_for_key['y_true'].mode()[0]
-    if true_label_n in mapping:
-        true_label = mapping[true_label_n]
-    else:
-        true_label = 'UNK'
-    print(f"Cluster {true_label}")
+for cluster_no in range(n_clusters):
+    y_pred_for_key = predicted[predicted['y_pred']==cluster_no]
+    true_label = 'UNKNOWN'
+    mode = y_pred_for_key['y_true'].mode()
+    if len(mode)>0:
+        true_label_n = y_pred_for_key['y_true'].mode()[0]
+        if true_label_n in mapping:
+            true_label = mapping[true_label_n]
+    print(f"Cluster {cluster_no}: {true_label}")
     unique, counts = np.unique(y_pred_for_key['text'], return_counts=True)
 
     freq_list = np.asarray((unique, counts)).T
     freqs = {w: f for w,f in freq_list}
-
-    wc = WordCloud().generate_from_frequencies(freqs)
-    plt.figure(figsize=(16, 14))
-    plt.imshow(wc, interpolation='bilinear')
-    plt.axis("off")
-    plt.show()
-
+    if len(freqs) > 0:
+        wc = WordCloud().generate_from_frequencies(freqs)
+        plt.figure(figsize=(16, 14))
+        plt.imshow(wc, interpolation='bilinear')
+        plt.axis("off")
+        plt.show()
+    else:
+        print(f"No words for cluster {true_label}")
 
 # %%
