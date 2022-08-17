@@ -279,11 +279,15 @@ def load_data(
         get_text: bool=False) -> Tuple[pd.DataFrame, pd.DataFrame, dict, list]:
     """
     Load data from disk
+    Arguments:
+        -size: number of rows to load
+        -entity_filter: list of entities to filter on
+        -get_text: whether to get the text as well
     Returns:
         -x: training data
         -y: training labels
         -mapping: mapping from label id to string
-        -get_text: if true, return text as well
+        -strings: list of noun chunks in the data, 1 per (x, y) pair
     """
     if entity_filter is None:
         entity_filter = []
