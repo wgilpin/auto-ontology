@@ -1,8 +1,13 @@
 import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
 from sklearn.metrics import normalized_mutual_info_score, adjusted_rand_score
+import sklearn.metrics
+from linear_assignment import linear_assignment
 
 nmi = normalized_mutual_info_score
 ari = adjusted_rand_score
+
 
 
 def acc(y_true, y_pred):
@@ -22,6 +27,35 @@ def acc(y_true, y_pred):
     w = np.zeros((D, D), dtype=np.int64)
     for i in range(y_pred.size):
         w[y_pred[i], y_true[i]] += 1
-    from scipy.optimize import linear_sum_assignment as linear_assignment
-    ind = list(zip(*linear_assignment(w.max() - w)))
+    ind = linear_assignment(w.max() - w)
     return sum([w[i, j] for i, j in ind]) * 1.0 / y_pred.size
+
+def plot_confusion(y, y_pred, mapping, size: int=8):
+
+    sns.set(font_scale=3)
+    confusion_matrix = sklearn.metrics.confusion_matrix(y, y_pred)
+    entity_label_tups = [(k,v) for k,v in mapping.items()]
+    entity_labels = [v for v,v in sorted(entity_label_tups, key=lambda tup: tup[0])]
+
+    # re-order confusion matrix into a diagonal
+
+    for y_hat in range(len(confusion_matrix)):
+        max = np.argmax(confusion_matrix[y_hat])
+        confusion_matrix.T[[y_hat, max]] = confusion_matrix.T[[max, y_hat]]
+    plt.figure(figsize=(size, size))
+    sns.set_context("notebook", font_scale=1, rc={"lines.linewidth": 2.5})
+
+    sns.heatmap(
+        confusion_matrix,
+        annot=True,
+        fmt="d",
+        cmap=sns.color_palette("crest", as_cmap=True),
+        cbar=False,
+        annot_kws={"size": 20},
+        xticklabels=entity_labels,
+        yticklabels=entity_labels,
+        )
+    plt.title("Confusion matrix\n", fontsize=20)
+    plt.ylabel('True label', fontsize=20)
+    plt.xlabel('Cluster label', fontsize=20)
+    plt.show()
