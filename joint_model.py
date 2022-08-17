@@ -285,13 +285,14 @@ plot_confusion(y, y_pred, mapping, 8)
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 
-def show_wordcloud(i: int, name: str, cluster: dict)-> None:
+def show_wordcloud(i: int, cluster: dict)-> None:
     """
     Show wordcloud for a cluster.
     """
     freqs = cluster['freqs']
     frac = cluster['frac']
     n = cluster['n']
+    name = cluster['name']
     print(f'{i}: "{name}", {n} items, ({frac*100:.2f}% confidence)')
     if len(freqs) > 0:
         wc = WordCloud().generate_from_frequencies(freqs)
@@ -336,17 +337,26 @@ for cluster_no in range(n_clusters):
             # we found a better cluster for this label
             clusters[true_label] = entry
         else:
+            # this cluster is worse than the one we already have, so it's unknown
             clusters[f"UNK-{cluster_no} Was {true_label}"] = entry
     else:
         clusters[true_label] = entry
 
+cluster_list = [{
+    **clusters[c],
+    'name': c,
+    'idx': idx} for idx, c in enumerate(clusters)]
+cluster_list = sorted(cluster_list, key=lambda x: -x['frac'])
 
-for i, cluster in enumerate(clusters):
-    if cluster[0:3] == "UNK":
-        show_wordcloud(i, cluster, clusters[cluster])
-for i, cluster in enumerate(clusters):
-    if cluster[0:3] != "UNK":
-        show_wordcloud(i, cluster, clusters[cluster])
+# show unknown clusters first
+for i, cluster in enumerate(cluster_list):
+    if cluster['name'][0:3] == "UNK":
+        show_wordcloud(i, cluster)
+
+# next show known clusters
+for i, cluster in enumerate(cluster_list):
+    if cluster['name'][0:3] != "UNK":
+        show_wordcloud(i, cluster)
 
 # %%
 
