@@ -4,6 +4,7 @@ wandb/
 results/
 model/
 *.log
+logs/
 
 # numpy state files
 *.npy
