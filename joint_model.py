@@ -13,6 +13,7 @@ from sklearn.cluster import KMeans
 import metrics
 from data import load_data
 
+
 # %%
 size = 10000
 max_iter = 140
@@ -20,6 +21,7 @@ max_iter = 140
 x, y, mapping, strings = load_data(size, get_text=True)
 n_clusters = len(np.unique(y))+10
 print(x.shape)
+
 
 # %%
 
@@ -62,12 +64,15 @@ def autoencoder_model(dims, act='relu', init='glorot_uniform'):
             Model(inputs=input_img, outputs=encoded, name='encoder'))
 
 
+
 # %%
 kmeans = KMeans(n_clusters=n_clusters, n_init=20)
 y_pred_kmeans = kmeans.fit_predict(x)
 
+
 # %%
 metrics.acc(y, y_pred_kmeans)
+
 
 # %%
 dims = [x.shape[-1], 500, 500, 2000, 50]
@@ -77,6 +82,7 @@ pretrain_optimizer = SGD(lr=1, momentum=0.9)
 pretrain_epochs = 300
 batch_size = 256
 save_dir = './results'
+
 
 # %%
 
@@ -150,8 +156,10 @@ class ClusteringLayer(Layer):
         return dict(list(base_config.items()) + list(config.items()))
 
 
+
 # %%
 autoencoder, encoder = autoencoder_model(dims, init=init)
+
 
 
 # %%
@@ -160,6 +168,7 @@ autoencoder.fit(x, x, batch_size=batch_size,
                 epochs=pretrain_epochs)  # , callbacks=cb)
 autoencoder.save_weights(save_dir + '/jae_weights.h5')
 
+
 # %%
 autoencoder.load_weights(save_dir+'/jae_weights.h5')
 clustering_layer = ClusteringLayer(
@@ -167,9 +176,11 @@ clustering_layer = ClusteringLayer(
 model = Model(inputs=encoder.input,
               outputs=[clustering_layer, autoencoder.output])
 
+
 # %%
 plot_model(model, to_file='model.png', show_shapes=True)
 Image(filename='model.png')
+
 
 # %%
 kmeans = KMeans(n_clusters=n_clusters, n_init=20)
@@ -177,9 +188,11 @@ y_pred = kmeans.fit_predict(encoder.predict(x))
 model.get_layer(name='clustering').set_weights([kmeans.cluster_centers_])
 y_pred_last = np.copy(y_pred)
 
+
 # %%
 model.compile(loss=['kld', 'mse'], loss_weights=[
               0.1, 1], optimizer=pretrain_optimizer)
+
 
 # %%
 loss = 0
@@ -189,12 +202,14 @@ update_interval = 140
 index_array = np.arange(x.shape[0])
 tol = 0.001  # tolerance threshold to stop training
 
+
 # %%
 
 
 def target_distribution(q):
     weight = q ** 2 / q.sum(0)
     return (weight.T / weight.sum(1)).T
+
 
 
 # %%
@@ -229,9 +244,11 @@ for ite in range(int(maxiter)):
 
 model.save_weights(save_dir + '/b_DEC_model_final.h5')
 
+
 # %%
 
 model.load_weights(save_dir + '/b_DEC_model_final.h5')
+
 
 # %%
 # Eval.
@@ -248,39 +265,34 @@ if y is not None:
     print('Acc = %.5f, nmi = %.5f, ari = %.5f' %
           (acc, nmi, ari), ' ; loss=', loss)
 
+
 # %% [markdown]
-#
+# 
 
 # %%
 len(np.unique(y_pred))
 
+
 # %%
 print(mapping)
+
 
 # %%
 plot_confusion(y, y_pred, mapping, 8)
 
+
 # %%
-import numpy as np
-import pandas as pd
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 
-print ("CLUSTERS")
-predicted = pd.DataFrame({'text':strings, 'y_pred':y_pred, 'y_true':y})
-for cluster_no in range(n_clusters):
-    y_pred_for_key = predicted[predicted['y_pred']==cluster_no]
-    true_label = 'UNKNOWN'
-    mode = y_pred_for_key['y_true'].mode()
-    if len(mode)>0:
-        true_label_n = y_pred_for_key['y_true'].mode()[0]
-        if true_label_n in mapping:
-            true_label = mapping[true_label_n]
-    print(f"Cluster {cluster_no}: {true_label}")
-    unique, counts = np.unique(y_pred_for_key['text'], return_counts=True)
-
-    freq_list = np.asarray((unique, counts)).T
-    freqs = {w: f for w,f in freq_list}
+def show_wordcloud(i: int, name: str, cluster: dict)-> None:
+    """
+    Show wordcloud for a cluster.
+    """
+    freqs = cluster['freqs']
+    frac = cluster['frac']
+    n = cluster['n']
+    print(f'{i}: "{name}", {n} items, ({frac*100:.2f}% confidence)')
     if len(freqs) > 0:
         wc = WordCloud().generate_from_frequencies(freqs)
         plt.figure(figsize=(16, 14))
@@ -288,6 +300,55 @@ for cluster_no in range(n_clusters):
         plt.axis("off")
         plt.show()
     else:
-        print(f"No words for cluster {true_label}")
+        print(f"No words for cluster {cluster}")
+
 
 # %%
+import numpy as np
+import pandas as pd
+
+print ("CLUSTERS")
+clusters = {}
+predicted = pd.DataFrame({'text':strings, 'y_pred':y_pred, 'y_true':y})
+for cluster_no in range(n_clusters):
+    y_pred_for_key = predicted[predicted['y_pred']==cluster_no]
+    true_label = 'UNKNOWN'
+    modal_value = y_pred_for_key['y_true'].mode()
+    if len(modal_value)>0:
+        if modal_value[0] in mapping:
+            true_label = mapping[modal_value[0]]
+        # confidence - fraction of this cluster that is actually this cluster
+        y_true_this_cluster = len(y_pred_for_key[y_pred_for_key['y_true']==modal_value[0]])
+        frac = y_true_this_cluster/len(y_pred_for_key)
+    else:
+        frac = 0
+
+    # wordcloud
+    unique, counts = np.unique(y_pred_for_key['text'], return_counts=True)
+    freq_list = np.asarray((unique, counts)).T
+    freq_list =  sorted(freq_list, key=lambda x: -x[1])[0:50]
+    freqs = {w: f for w,f in freq_list}
+    entry = {'freqs':freqs, 'frac':frac, 'n':len(y_pred_for_key)}
+    if true_label == 'UNKNOWN':
+        clusters[f"UNK-{cluster_no}"] = entry
+    elif true_label in clusters:
+        if clusters[true_label]['frac'] < frac:
+            # we found a better cluster for this label
+            clusters[true_label] = entry
+        else:
+            clusters[f"UNK-{cluster_no} Was {true_label}"] = entry
+    else:
+        clusters[true_label] = entry
+
+
+for i, cluster in enumerate(clusters):
+    if cluster[0:3] == "UNK":
+        show_wordcloud(i, cluster, clusters[cluster])
+for i, cluster in enumerate(clusters):
+    if cluster[0:3] != "UNK":
+        show_wordcloud(i, cluster, clusters[cluster])
+
+# %%
+
+
+
