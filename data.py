@@ -136,7 +136,7 @@ def test_train_split(df, frac=1.0):
     train_x_strings = x_train_bal['chunk']
     x_train_bal = np.array(x_train_bal.drop(
         columns=['chunk', 'label', 'label_id', 'sentence']))
-        
+
     logging.info("Train df: %s", train_x_df.shape)
     return x_train_bal, test_x_df, y_train_bal, test_y_df, train_x_strings
 
@@ -273,13 +273,17 @@ def get_training_data(
     return test_train_split(df, fraction)
 
 
-def load_data(size: int, entity_filter: list=None, get_text: bool=False) -> Tuple[pd.DataFrame, pd.DataFrame, dict]:
+def load_data(
+        size: int,
+        entity_filter: list=None,
+        get_text: bool=False) -> Tuple[pd.DataFrame, pd.DataFrame, dict, list]:
     """
     Load data from disk
     Returns:
         -x: training data
         -y: training labels
         -mapping: mapping from label id to string
+        -get_text: if true, return text as well
     """
     if entity_filter is None:
         entity_filter = []
@@ -313,7 +317,7 @@ def load_data(size: int, entity_filter: list=None, get_text: bool=False) -> Tupl
 
     x, _, y, _, strings = test_train_split(trg)
     print(f"x: {x.shape}, y: {y.shape}")
-    
+
     filtered_map = {}
     y_unq = np.unique(y)
     for idx, y_val in enumerate(y_unq):
