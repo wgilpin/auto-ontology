@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -30,7 +31,7 @@ def acc(y_true, y_pred):
     ind = linear_assignment(w.max() - w)
     return sum([w[i, j] for i, j in ind]) * 1.0 / y_pred.size
 
-def plot_confusion(y, y_pred, mapping, size: int=8):
+def plot_confusion(y, y_pred, mapping, save_dir: str=None, size: int=8):
 
     sns.set(font_scale=3)
     confusion_matrix = sklearn.metrics.confusion_matrix(y, y_pred)
@@ -58,4 +59,6 @@ def plot_confusion(y, y_pred, mapping, size: int=8):
     plt.title("Confusion matrix\n", fontsize=20)
     plt.ylabel('True label', fontsize=20)
     plt.xlabel('Cluster label', fontsize=20)
+    if save_dir:
+        plt.savefig(os.path.join(save_dir, "confusion_matrix.png"))
     plt.show()
