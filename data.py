@@ -97,7 +97,7 @@ def join_punctuation(seq, characters=".,;?!'')-"):
 # CREATE TRAINING DATA
 
 
-def test_train_split(df, frac=1.0, mapping: dict=None):
+def test_train_split(df, frac=1.0):
     """
     Returns a balanced train and test split of the dataframe
     -X train
@@ -120,23 +120,15 @@ def test_train_split(df, frac=1.0, mapping: dict=None):
         train_x_df = training_data
     train_y_df = np.array(training_data["label"])
     logging.info("Full df: %s", df.shape)
-
+    
     if test_x_df:
         logging.info("Test df: %s", test_x_df.shape)
 
     # see balance
     unique, counts = np.unique(train_y_df, return_counts=True)
+    uniques = np.column_stack((unique, counts)) 
     print("Train data balance:")
-    if mapping:
-        freq_list = np.asarray((unique, counts)).T
-        freq_list =  sorted(freq_list, key=lambda x: -x[1])
-        freqs = [[mapping[w], f] for w,f in freq_list]
-        freqs = pd.DataFrame([[mapping[w], f] for w,f in freq_list])
-        freqs.columns = ["entity", "freq"]
-        print("Most frequent words: ")
-        print(freqs.iloc[:])
-        # for row in freqs:
-        #     print(f"{row[0]}\t\t{row[1]}")
+    print(uniques)
 
     # oversample for balance
     ros = RandomOverSampler(random_state=0)
@@ -327,7 +319,7 @@ def load_data(
 
     print(f'Done: {trg.shape}')
 
-    x, _, y, _, strings = test_train_split(trg, mapping=mapping)
+    x, _, y, _, strings = test_train_split(trg)
     print(f"x: {x.shape}, y: {y.shape}")
 
     filtered_map = {}
@@ -338,4 +330,3 @@ def load_data(
     print(filtered_map)
 
     return x, y, filtered_map, strings if get_text else None
-
