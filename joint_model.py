@@ -381,17 +381,18 @@ from pandas import DataFrame
 from metrics import plot_confusion
 from IPython.display import Image
 from keras.utils import plot_model
+from tqdm import tqdm
 from tensorflow.keras.layers import Dense, Input, Layer, InputSpec
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import SGD
 from tensorflow.keras.initializers import VarianceScaling
+from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.cluster import KMeans
 from data import load_data
 from wordcloud import WordCloud
 
-
 # %%
-def autoencoder_model(layer_specs: list, act: str='relu', init_fn: str='glorot_uniform'):
+def autoencoder_model(layer_specs: list, act: str='tanh', init_fn: str='glorot_uniform'):
     """
     Creates the autoencoder given
     -layer_specs: list of layer sizes.
@@ -513,12 +514,71 @@ def target_distribution(q):
 
 
 # %%
+from sklearn.cluster import KMeans, DBSCAN, OPTICS
+from sklearn import mixture
+from scipy.stats import multivariate_normal
+
+dbscan_eps = 0.2
+dbscan_min_samples = 5
+
+def do_clustering(clustering: str, n_clusters: int, z_state: DataFrame):
+    if clustering == 'GMM':
+        gmix = mixture.GaussianMixture(
+            n_components=n_clusters, covariance_type='full')
+        gmix.fit(z_state)
+        y_pred = gmix.predict(z_state)
+        # get centres
+        centers = np.empty(shape=(gmix.n_components, z_state.shape[1]))
+        for i in range(gmix.n_components):
+            density = multivariate_normal(
+                cov=gmix.covariances_[i],
+                mean=gmix.means_[i]).logpdf(z_state)
+            centers[i, :] = z_state[np.argmax(density)]
+    elif clustering == 'Kmeans':
+        kmeans = KMeans(n_clusters=n_clusters, n_init=10)
+        y_pred = kmeans.fit_predict(z_state)
+        centers = kmeans.cluster_centers_
+    elif clustering == 'DBSCAN':
+        dbscan = DBSCAN(
+            eps=dbscan_eps,
+            min_samples=dbscan_min_samples,
+            metric='manhattan')
+        y_pred = dbscan.fit_predict(z_state)
+        centers = dbscan.components_
+    elif clustering == 'OPTICS':
+        optics = OPTICS(min_samples=dbscan_min_samples)
+        y_pred = optics.fit_predict(z_state)
+        centers = optics.components_
+    else:
+        raise ValueError('Clustering algorithm not specified/unknown.')
+
+    return y_pred, centers
+
+# %%
+from linear_assignment import linear_assignment
+
+def cluster_loss(clustering:str, n_clusters: int):
+    def loss(y_true, y_pred):
+        y_pred_cluster, _ = do_clustering(clustering, n_clusters, y)
+        y_true = y_true.astype(np.int64)
+        assert y_pred_cluster.size == y_true.size
+        D = max(y_pred_cluster.max(), y_true.max()) + 1
+        w = np.zeros((D, D), dtype=np.int64)
+        for i in range(y_pred_cluster.size):
+            w[y_pred[i], y_true[i]] += 1
+        ind = linear_assignment(w.max() - w)
+        c_loss = sum([w[i, j] for i, j in ind]) * 1.0 / y_pred_cluster.size
+        print(f"Cluster Loss {c_loss} on {y_pred_cluster.size} clusters")
+    return loss
+
+# %%
 def train(x: DataFrame,
           y: DataFrame,
           y_pred_last: DataFrame,
           batch_size: int,
           model: Model,
-          save_dir: str):
+          save_dir: str,
+          use_cluster_loss: bool=False):
     loss = 0
     index = 0
     maxiter = 8000
@@ -552,54 +612,20 @@ def train(x: DataFrame,
                 break
         idx = index_array[index *
                         batch_size: min((index+1) * batch_size, x.shape[0])]
-        loss = model.train_on_batch(x=x[idx], y=[p[idx], x[idx]])
-        index = index + 1 if (index + 1) * batch_size <= x.shape[0] else 0
+        loss = model.train_on_batch(x=x[idx], y=[p[idx], x[idx]], reset_metrics=True,)
+        try:
+            index = index + 1 if (index + 1) * batch_size <= x.shape[0] else 0
+        except:
+            print('e')
 
     model.save_weights(os.path.join(save_dir, 'DEC_model_final.h5'))
     return loss
 
 # %%
-from sklearn.cluster import KMeans, DBSCAN, OPTICS
-from sklearn import mixture
-from scipy.stats import multivariate_normal
-
-dbscan_eps = 0.2
-dbscan_min_samples = 5
-
-def do_clustering(clustering: str, n_clusters: int, z_state: DataFrame):
-    if clustering == 'GMM':
-        gmix = mixture.GaussianMixture(
-            n_components=n_clusters, covariance_type='full')
-        gmix.fit(z_state)
-        y_pred = gmix.predict(z_state)
-        # get centres
-        centers = np.empty(shape=(gmix.n_components, z_state.shape[1]))
-        for i in range(gmix.n_components):
-            density = multivariate_normal(
-                cov=gmix.covariances_[i],
-                mean=gmix.means_[i]).logpdf(z_state)
-            centers[i, :] = z_state[np.argmax(density)]
-    elif clustering == 'Kmeans':
-        kmeans = KMeans(n_clusters=n_clusters, n_init=10)
-        y_pred = kmeans.fit_predict(z_state)
-        centers = kmeans.cluster_centers_
-    elif clustering == 'DBSCAN':
-        dbscan = DBSCAN(eps=dbscan_eps, min_samples=dbscan_min_samples)
-        y_pred = dbscan.fit_predict(z_state)
-        centers = dbscan.components_
-    elif clustering == 'OPTICS':
-        optics = OPTICS(min_samples=dbscan_min_samples)
-        y_pred = optics.fit_predict(z_state)
-        centers = optics.components_
-    else:
-        raise ValueError('Clustering algorithm not specified/unknown.')
-
-    return y_pred, centers
-
-# %%
 # write_messages.py
 
 from jinja2 import Environment, FileSystemLoader
+from pathlib import Path
 
 def write_results_page(clusters, save_dir, test_name):
     
@@ -614,7 +640,8 @@ def write_results_page(clusters, save_dir, test_name):
     }
     with open(results_filename, mode="w", encoding="utf-8") as results:
         results.write(results_template.render(context))
-        print(f"... wrote {results_filename}")
+        full_filename = Path(results_filename).absolute()
+        print (f'... wrote results  <a href="{full_filename}">{full_filename}</a>')
 
 # %%
 def show_wordcloud(i: int, cluster: dict, filepath: str, width: int=16, save_only: bool=False)-> None:
@@ -638,9 +665,15 @@ def show_wordcloud(i: int, cluster: dict, filepath: str, width: int=16, save_onl
         print(f"No words for cluster {cluster}")
 
 # %%
-def run_model(run_name: str, extra_clusters: int, data_rows: int=10000,
-        entities: list[str]=None, entity_count: int=0, do_training: bool=False,
-        cluster:str = "Kmeans"):
+entity_filter_list = ['GPE', 'PERSON', 'ORG', 'DATE', 'NORP', 'TIME',
+    'PERCENT', 'LOC', 'QUANTITY', 'MONEY', 'FAC', 'CARDINAL', 'EVENT',
+    'PRODUCT', 'WORK_OF_ART', 'ORDINAL', 'LANGUAGE']
+
+
+
+def make_model(run_name: str, n_clusters: int, data_rows: int,
+        entities: list[str]=None, entity_count: int=0, 
+        cluster:str = "GMM", include_none: bool=False,):
     """
     Run the model.
 
@@ -650,25 +683,23 @@ def run_model(run_name: str, extra_clusters: int, data_rows: int=10000,
         extra_clusters: number of extra clusters to add to the model.
         entities: list of entities to use.
         entity_count: number of entities to use.
-        do_training: whether to train the model.
     """
     
     if entities is not None and entity_count > 0:
         print("ERROR: Don't use both entities and entity_count")
         return
-    entity_filter_list = ['GPE', 'PERSON', 'ORG', 'DATE', 'NORP', 'TIME',
-        'PERCENT', 'LOC', 'QUANTITY', 'MONEY', 'FAC', 'CARDINAL', 'EVENT',
-        'PRODUCT', 'WORK_OF_ART', 'ORDINAL', 'LANGUAGE']
     if entities is None:
         if entity_count==0:
             entities = entity_filter_list
         else:
             entities = entity_filter_list[:entity_count]
+    print("Load Data")
     x, y, mapping, strings = load_data(
                                 data_rows,
                                 entity_filter=entities,
-                                get_text=True)
-    n_clusters = len(np.unique(y)) + extra_clusters
+                                get_text=True,)
+                                # include_none=False)
+    print("Data Loaded")   
 
     max_iter = 140
     dims = [x.shape[-1], 500, 500, 2000, 50]
@@ -676,7 +707,7 @@ def run_model(run_name: str, extra_clusters: int, data_rows: int=10000,
                         mode='fan_in',
                         scale=1. / 3.,
                         distribution='uniform')
-    pretrain_optimizer = SGD(learning_rate=1, momentum=0.9)
+    pretrain_optimizer = 'adam'# SGD(learning_rate=1, momentum=0.9)
     pretrain_epochs = 300
     batch_size = 256
     save_dir = f'./results/{run_name}'
@@ -684,49 +715,113 @@ def run_model(run_name: str, extra_clusters: int, data_rows: int=10000,
         # create save dir
         os.makedirs(save_dir)
     autoencoder, encoder = autoencoder_model(dims, init_fn=init)
-    autoencoder.compile(optimizer=pretrain_optimizer, loss='mse')
+    autoencoder.compile(
+        optimizer=pretrain_optimizer,
+        loss=['mse'])
 
-    if do_training:
-        print("Training autoencoder")
-        history = autoencoder.fit(x, x,
-                                batch_size=batch_size,
-                                epochs=pretrain_epochs, 
-                                verbose=0)
-        autoencoder.save_weights(os.path.join(save_dir, 'jae_weights.h5'))
-        # summarize history for loss
-        plt.plot(history.history['loss'])
-        plt.title('Autoencoder pretraining loss')
-        plt.ylabel('loss')
-        plt.xlabel('epoch')
-        plt.show()
-    else:
-        autoencoder.load_weights(os.path.join(save_dir, 'jae_weights.h5'))
+    early_stopping_cb = EarlyStopping(
+        monitor='loss', patience=5, verbose=1, min_delta=0.0003)
+    print("Training autoencoder")
+    history = autoencoder.fit(x, x,
+                            batch_size=batch_size,
+                            epochs=pretrain_epochs, 
+                            verbose=0,
+                            callbacks=[early_stopping_cb])
+    autoencoder.save_weights(os.path.join(save_dir, 'jae_weights.h5'))
+    print("Trained autoencoder")
+    # summarize history for loss
+    plt.plot(history.history['loss'])
+    plt.title('Autoencoder pretraining loss')
+    plt.ylabel('loss')
+    plt.xlabel('epoch')
+    plt.show()
+
     clustering_layer = ClusteringLayer(
         n_clusters, name='clustering')(encoder.output)
     model = Model(inputs=encoder.input,
                 outputs=[clustering_layer, autoencoder.output])
-    model.compile(loss=['kld', 'mse'], loss_weights=[
-              0.1, 1], optimizer=pretrain_optimizer)
+    model.compile(
+        loss=['kld', 'mse', cluster_loss(cluster, n_clusters)],
+        loss_weights=[0.3, 1, 0.2],
+        optimizer=SGD(learning_rate=1, momentum=0.9))
     img_file = os.path.join(save_dir, 'model.png')
     plot_model(model, to_file=img_file, show_shapes=True)
     Image(filename=img_file)
 
     loss = 0
-    if do_training:
-        y_pred, centers = do_clustering(cluster, n_clusters, encoder.predict(x))
-        # kmeans = KMeans(n_clusters=n_clusters, n_init=20)
-        # y_pred = kmeans.fit_predict(encoder.predict(x))
-        model.get_layer(name='clustering').set_weights([centers])
-        y_pred_last = np.copy(y_pred)
-        loss = train(x, y, y_pred_last, batch_size, model, save_dir)
-    else:
-        model.load_weights(os.path.join(save_dir, 'DEC_model_final.h5'))
 
+    # init cluster centres
+    print("cluster init")
+    if x.shape[0] > 10000:
+        x_sample = x[np.random.choice(x.shape[0], 100, replace=False)]
+    else:
+        x_sample = x
+    y_pred, centers = do_clustering(
+        'GMM' if cluster=='GMM' else 'Kmeans',
+        n_clusters,
+        encoder.predict(x_sample))
+    del x_sample
+    model.get_layer(name='clustering').set_weights([centers])
+    y_pred_last = np.copy(y_pred)
+    print("cluster init done")
+
+    # train
+    train(x, y, y_pred_last, batch_size, model, save_dir)
+    print("Training Done")
+
+
+# %%
+
+def evaluate_model(run_name: str, n_clusters: int, data_rows: int,
+        cluster:str = "Kmeans", include_none: bool=True,):
+    """
+    Run the model.
+
+    Arguments:
+        run_name: name of the run.
+        data_rows: number of rows to use from the data.
+        n_clusters: number of clusters to use.
+        cluster: clustering algorithm to use.
+        include_none: include unknown noun-chunks in the data.
+    """
+    print("Load Data")
+    x, y, mapping, strings = load_data(
+                                data_rows,
+                                get_text=True,)
+                                # include_none=include_none)
+    print("Data Loaded")   
+
+    max_iter = 140
+    dims = [x.shape[-1], 500, 500, 2000, 50]
+    save_dir = f'./results/{run_name}'
+    if not os.path.exists(save_dir):
+        # create save dir
+        os.makedirs(save_dir)
+
+    autoencoder, encoder = autoencoder_model(dims)
+    ae_weights_file = os.path.join(save_dir, 'jae_weights.h5')
+    print(f"Loading AE weights from {ae_weights_file}")
+    autoencoder.load_weights(ae_weights_file)
+    
+    clustering_layer = ClusteringLayer(
+        n_clusters, name='clustering')(encoder.output)
+    model = Model(inputs=encoder.input,
+                outputs=[clustering_layer, autoencoder.output])
+
+    loss = 0
+    
+    model_weights_file = os.path.join(save_dir, 'DEC_model_final.h5')
+    print(f"Loading model weights from {model_weights_file}")
+    model.load_weights(model_weights_file)
+    
     # predict cluster labels
-    q, _ = model.predict(x, verbose=0)
+    print("Predicting...")
+    q, _ = model.predict(x, verbose=1)
     p = target_distribution(q)  # update the auxiliary target distribution p
 
+
     # evaluate the clustering performance
+    print("Evaluating...")
     y_pred = q.argmax(1)
     if y is not None:
         acc = np.round(metrics.acc(y, y_pred), 5)
@@ -745,7 +840,7 @@ def run_model(run_name: str, extra_clusters: int, data_rows: int=10000,
     print ("CLUSTERS")
     clusters = {}
     predicted = DataFrame({'text':strings, 'y_pred':y_pred, 'y_true':y})
-    for cluster_no in range(n_clusters):
+    for cluster_no in tqdm(range(n_clusters)):
         y_pred_for_key = predicted[predicted['y_pred']==cluster_no]
         true_label = 'UNKNOWN'
         modal_value = y_pred_for_key['y_true'].mode()
@@ -801,27 +896,102 @@ def run_model(run_name: str, extra_clusters: int, data_rows: int=10000,
             display_list.append(cluster)
 
     
-    write_results_page(display_list, save_dir, run_name)
+    print(write_results_page(display_list, save_dir, run_name))
+
+
+
+# %%
+def make_and_evaluate_model(run_name, train_size, eval_size, n_clusters, entity_count):
+    """
+    Make and evaluate a model.
+    Arguments:
+        run_name: name of the run.
+        data_rows: number of rows to use.
+        n_clusters: number of clusters to use.
+        entity_count: number of entities to use.
+    """
+    make_model(run_name, data_rows=train_size, n_clusters=n_clusters, entity_count=entity_count)
+    evaluate_model(run_name, data_rows=eval_size, n_clusters=n_clusters)
 
 # %%
 stop
 
 # %%
-run_model('test1', do_training=True, entity_count=3, extra_clusters=5 )
+%history -g -f jupyter_history2.py
+
+# %% [markdown]
+# # Evaluate
 
 # %%
-run_model('test1', do_training=False, entity_count=3, extra_clusters=5 )
+make_and_evaluate_model('test3', train_size=1000, eval_size=10000, n_clusters=25, entity_count=10)
+
 
 # %%
-run_model('test5+5', do_training=True, entity_count=5, extra_clusters=5 )
+make_and_evaluate_model('test1', train_size=10000, eval_size=10000, n_clusters=25, entity_count=0)
 
 # %%
-run_model('test8+8', do_training=True, entity_count=8, extra_clusters=8 )
+make_and_evaluate_model('test1-2', train_size=10000, eval_size=10000, n_clusters=25, entity_count=0)
 
 # %%
-run_model('testAll+10-GMM', do_training=False, entity_count=0, extra_clusters=10, cluster="GMM" )
+evaluate_model('test1-2', data_rows=10000, n_clusters=25, include_none=True)
 
 # %%
-%history -g -f "filename"
+make_model('test1', cluster="GMM", data_rows=1000, entity_count=0, n_clusters=20 )
+
+# %%
+make_model('test1', cluster="GMM", data_rows=1000, entity_count=0, n_clusters=20 )
+
+
+# %%
+evaluate_model('test1', data_rows=1000, n_clusters=20 )
+
+# %%
+evaluate_model('test1', data_rows=1000, entity_count=0, n_clusters=20 )
+
+# %%
+make_and_evaluate_model('test2', train_size=10000, eval_size=10000, n_clusters=15, entity_count=10)
+
+# %%
+make_model('reset-metrics', cluster='Kmeans', data_rows=1000, entity_count=0, n_clusters=20 )
+
+
+# %%
+make_model('reset-metrics', cluster='Kmeans', data_rows=10000, entity_count=10, n_clusters=15 )
+
+
+# %%
+make_model('reset-metrics-dbscan', cluster="DBSCAN", data_rows=1000, entity_count=0, n_clusters=20 )
+
+
+# %%
+make_model('reset-metrics-dbscan', cluster="DBSCAN", data_rows=1000, entity_count=10, n_clusters=15)
+
+
+# %%
+
+
+# %%
+make_model('reset-metrics-dbscan', cluster="OPTICS", data_rows=1000, entity_count=0, n_clusters=20 )
+
+# %%
+make_model('reset-metrics-optics', cluster="OPTICS", data_rows=1000, entity_count=10, n_clusters=15 )
+
+
+# %%
+evaluate_model('reset-metrics-dbscan',
+        entity_count=10,
+        data_rows=1000,
+        n_clusters=20,
+        cluster="DBSCAN",
+        )
+
+# %%
+
+
+# %% [markdown]
+# # encode then cluster
+
+# %%
+
 
 
