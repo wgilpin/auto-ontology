@@ -6,7 +6,7 @@ import logging
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from typing import Tuple
+from typing import Tuple, overload
 
 from imblearn.over_sampling import RandomOverSampler
 from spacyNER import (TrainingDataSpacy,
@@ -97,7 +97,7 @@ def join_punctuation(seq, characters=".,;?!'')-"):
 # CREATE TRAINING DATA
 
 
-def test_train_split(df, frac=1.0):
+def test_train_split(df, frac=1.0, oversample: bool=True):
     """
     Returns a balanced train and test split of the dataframe
     -X train
@@ -113,16 +113,15 @@ def test_train_split(df, frac=1.0):
         test_x_df = np.array(testing_data.drop(
             columns=['chunk', 'label', 'label_id', 'sentence']))
         train_y_df = np.array(training_data["label"])
+        logging.info("Test df: %s", test_x_df.shape)
     else:
         training_data = df
         test_x_df = None
         test_y_df = None
-        train_x_df = training_data
-    train_y_df = np.array(training_data["label"])
+    train_x_df = training_data
+    train_y_df = np.array(train_x_df["label"])
     logging.info("Full df: %s", df.shape)
-    
-    if test_x_df:
-        logging.info("Test df: %s", test_x_df.shape)
+
 
     # see balance
     unique, counts = np.unique(train_y_df, return_counts=True)
@@ -130,15 +129,16 @@ def test_train_split(df, frac=1.0):
     print("Train data balance:")
     print(uniques)
 
-    # oversample for balance
-    ros = RandomOverSampler(random_state=0)
-    x_train_bal, y_train_bal = ros.fit_resample(train_x_df, train_y_df)
-    train_x_strings = x_train_bal['chunk']
-    x_train_bal = np.array(x_train_bal.drop(
+    if oversample:
+        # oversample for balance
+        ros = RandomOverSampler(random_state=0)
+        train_x_df, train_y_df = ros.fit_resample(train_x_df, train_y_df)
+    train_x_strings = train_x_df['chunk']
+    train_x_df = np.array(train_x_df.drop(
         columns=['chunk', 'label', 'label_id', 'sentence']))
 
     logging.info("Train df: %s", train_x_df.shape)
-    return x_train_bal, test_x_df, y_train_bal, test_y_df, train_x_strings
+    return train_x_df, test_x_df, train_y_df, test_y_df, train_x_strings
 
 
 def get_sentences_from_conll():
@@ -276,7 +276,8 @@ def get_training_data(
 def load_data(
         size: int,
         entity_filter: list=None,
-        get_text: bool=False) -> Tuple[pd.DataFrame, pd.DataFrame, dict, list]:
+        get_text: bool=False,
+        oversample: bool=True) -> Tuple[pd.DataFrame, pd.DataFrame, dict, list]:
     """
     Load data from disk
     Arguments:
@@ -292,6 +293,7 @@ def load_data(
     if entity_filter is None:
         entity_filter = []
 
+
     filename_data = f"./data/conll_spacy_{size}.pkl"
     filename_mapping = f"./data/conll_spacy_{size}_map.pkl"
     if os.path.exists(filename_data) and os.path.exists(filename_mapping):
@@ -299,6 +301,7 @@ def load_data(
         trg = pd.read_pickle(filename_data)
         with open(filename_mapping, 'rb') as handle:
             mapping = pickle.load(handle)
+            print(f"LOADED {mapping}")
     else:
         print("Creating data")
         sample_conll = get_sample_conll_hf(size)
@@ -309,6 +312,7 @@ def load_data(
         trg.to_pickle(filename_data)
         with open(filename_mapping, 'wb') as handle:
             pickle.dump(mapping, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        print(f"SAVED {mapping}")
 
     if entity_filter:
         # entity_filter to id list
@@ -319,7 +323,7 @@ def load_data(
 
     print(f'Done: {trg.shape}')
 
-    x, _, y, _, strings = test_train_split(trg)
+    x, _, y, _, strings = test_train_split(trg, oversample=oversample)
     print(f"x: {x.shape}, y: {y.shape}")
 
     filtered_map = {}
