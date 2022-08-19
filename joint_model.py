@@ -368,7 +368,7 @@ for i, cluster in enumerate(cluster_list):
         show_wordcloud(i, cluster)
 
 # %% [markdown]
-# # Hyperparameter Tuning
+# # Tuning
 
 # %%
 
@@ -669,9 +669,35 @@ entity_filter_list = ['GPE', 'PERSON', 'ORG', 'DATE', 'NORP', 'TIME',
     'PERCENT', 'LOC', 'QUANTITY', 'MONEY', 'FAC', 'CARDINAL', 'EVENT',
     'PRODUCT', 'WORK_OF_ART', 'ORDINAL', 'LANGUAGE']
 
+def make_data(
+            train_size: int,
+            entities: list[str]=None,
+            entity_count: int=0,
+            oversample: bool=True): 
+    
+    if entities is not None and entity_count > 0:
+        print("ERROR: Don't use both entities and entity_count")
+        return
+    if entities is None:
+        if entity_count==0:
+            entities = entity_filter_list
+        else:
+            entities = entity_filter_list[:entity_count]
+    print("Load Data")
+    x, y, mapping, strings = load_data(
+                                train_size,
+                                entity_filter=entities,
+                                get_text=True,
+                                oversample=oversample)
+    print("Data Loaded")   
+
+    return x, y, mapping, strings
 
 
-def make_model(run_name: str, n_clusters: int, data_rows: int,
+# %%
+
+
+def make_model(run_name: str, n_clusters: int, train_size: int,
         entities: list[str]=None, entity_count: int=0, 
         cluster:str = "GMM", include_none: bool=False,):
     """
@@ -684,21 +710,12 @@ def make_model(run_name: str, n_clusters: int, data_rows: int,
         entities: list of entities to use.
         entity_count: number of entities to use.
     """
-    
-    if entities is not None and entity_count > 0:
-        print("ERROR: Don't use both entities and entity_count")
-        return
-    if entities is None:
-        if entity_count==0:
-            entities = entity_filter_list
-        else:
-            entities = entity_filter_list[:entity_count]
-    print("Load Data")
-    x, y, mapping, strings = load_data(
-                                data_rows,
-                                entity_filter=entities,
-                                get_text=True,)
-                                # include_none=False)
+    x, y, mapping, strings = make_data(
+                                    train_size,
+                                    entities,
+                                    entity_count,
+                                    oversample=True)
+
     print("Data Loaded")   
 
     max_iter = 140
@@ -772,7 +789,7 @@ def make_model(run_name: str, n_clusters: int, data_rows: int,
 
 # %%
 
-def evaluate_model(run_name: str, n_clusters: int, data_rows: int,
+def evaluate_model(run_name: str, n_clusters: int, eval_size: int, 
         cluster:str = "Kmeans", include_none: bool=True,):
     """
     Run the model.
@@ -786,9 +803,8 @@ def evaluate_model(run_name: str, n_clusters: int, data_rows: int,
     """
     print("Load Data")
     x, y, mapping, strings = load_data(
-                                data_rows,
-                                get_text=True,)
-                                # include_none=include_none)
+                                eval_size,
+                                get_text=True)
     print("Data Loaded")   
 
     max_iter = 140
@@ -917,10 +933,26 @@ def make_and_evaluate_model(run_name, train_size, eval_size, n_clusters, entity_
 stop
 
 # %%
-%history -g -f jupyter_history2.py
+%history -g -f jupyter_history3.py
 
 # %% [markdown]
 # # Evaluate
+
+# %%
+make_data(10000, oversample=False)
+"Done"
+
+# %%
+make_model('test-none-10k', train_size=10000, n_clusters=25, entity_count=10)
+
+
+# %%
+evaluate_model('test-none-10k', eval_size=10000, n_clusters=25)
+
+
+# %%
+evaluate_model('test-none-30', train_size=30, eval_size=1000, n_clusters=25)
+
 
 # %%
 make_and_evaluate_model('test3', train_size=1000, eval_size=10000, n_clusters=25, entity_count=10)
