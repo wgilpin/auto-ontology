@@ -221,7 +221,7 @@ class TrainingDataSpacy():
             "chunk": short_sent,
             # label_n: 0 for noun chunk, or spacy entity id number
             "label_n": span.label if is_entity else 0,
-            "label_id": span.label_ if is_entity else None,
+            "label_id": span.label_ if is_entity else 'UNKNOWN',
             "embedding": embedding,
         }
 
