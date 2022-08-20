@@ -31,7 +31,7 @@ def acc(y_true, y_pred):
     ind = linear_assignment(w.max() - w)
     return sum([w[i, j] for i, j in ind]) * 1.0 / y_pred.size
 
-def plot_confusion(y, y_pred, mapping, save_dir: str=None, size: int=8):
+def plot_confusion(y, y_pred, mapping, save_dir: str=None, size: int=8, details: bool=True):
 
     sns.set(font_scale=3)
     confusion_matrix = sklearn.metrics.confusion_matrix(y, y_pred)
@@ -48,7 +48,7 @@ def plot_confusion(y, y_pred, mapping, save_dir: str=None, size: int=8):
 
     sns.heatmap(
         confusion_matrix,
-        annot=True,
+        annot=details,
         fmt="d",
         cmap=sns.color_palette("crest", as_cmap=True),
         cbar=False,
