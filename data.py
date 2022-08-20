@@ -131,6 +131,7 @@ def test_train_split(df, frac=1.0, oversample: bool=True):
 
     if oversample:
         # oversample for balance
+        print("Balancing data")
         ros = RandomOverSampler(random_state=0)
         train_x_df, train_y_df = ros.fit_resample(train_x_df, train_y_df)
     train_x_strings = train_x_df['chunk']
