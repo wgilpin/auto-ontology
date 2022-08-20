@@ -235,8 +235,8 @@ for ite in range(int(maxiter)):
             nmi = np.round(metrics.nmi(y, y_pred), 5)
             ari = np.round(metrics.ari(y, y_pred), 5)
             loss = np.round(loss, 5)
-            print('Iter %d: acc = %.5f, nmi = %.5f, ari = %.5f' %
-                  (ite, acc, nmi, ari), ' ; loss=', loss)
+            print(f'Acc = {acc:.5f}, nmi = {nmi:.5f}, ari = {ari:.5f}'
+                  f' ; loss={loss}')
 
         # check stop criterion
         delta_label = np.sum(y_pred != y_pred_last).astype(
@@ -271,8 +271,8 @@ if y is not None:
     nmi = np.round(metrics.nmi(y, y_pred), 5)
     ari = np.round(metrics.ari(y, y_pred), 5)
     loss = np.round(loss, 5)
-    print('Acc = %.5f, nmi = %.5f, ari = %.5f' %
-          (acc, nmi, ari), ' ; loss=', loss)
+    print(f'Acc = {acc:.5f}, nmi = {nmi:.5f}, ari = {ari:.5f}'
+          f' ; loss={loss}')
 
 
 # %% [markdown]
@@ -514,14 +514,32 @@ def target_distribution(q):
 
 
 # %%
-from sklearn.cluster import KMeans, DBSCAN, OPTICS
+from tabnanny import verbose
+from sklearn.cluster import KMeans, DBSCAN, OPTICS, AgglomerativeClustering
 from sklearn import mixture
 from scipy.stats import multivariate_normal
 
-dbscan_eps = 0.2
-dbscan_min_samples = 5
 
-def do_clustering(clustering: str, n_clusters: int, z_state: DataFrame):
+def do_clustering(clustering: str, n_clusters: int, z_state: DataFrame, params={}):
+    """
+    Perform clustering on the data.
+        -clustering: the clustering algorithm to use
+        -n_clusters: the number of clusters to use
+        -z_state: the data to cluster
+        -params: dict, optional
+            'eps' or 'min_samples' values for DBSCAN/OPTICS
+    Returns:
+        - the cluster assignments
+        - cluster centers
+    """
+    dbscan_eps = 1
+    dbscan_min_samples = 5
+    
+    if 'eps' in params:
+        dbscan_eps = params['eps']
+    if 'min_samples' in params:
+        dbscan_min_samples = params['min_samples']
+
     if clustering == 'GMM':
         gmix = mixture.GaussianMixture(
             n_components=n_clusters, covariance_type='full')
@@ -549,6 +567,10 @@ def do_clustering(clustering: str, n_clusters: int, z_state: DataFrame):
         optics = OPTICS(min_samples=dbscan_min_samples)
         y_pred = optics.fit_predict(z_state)
         centers = optics.components_
+    elif clustering=="agg":
+        agg = AgglomerativeClustering(n_clusters=n_clusters, affinity='manhattan', linkage='average')
+        y_pred = agg.fit_predict(z_state)
+        centers = None
     else:
         raise ValueError('Clustering algorithm not specified/unknown.')
 
@@ -557,18 +579,25 @@ def do_clustering(clustering: str, n_clusters: int, z_state: DataFrame):
 # %%
 from linear_assignment import linear_assignment
 
+def cluster_acc(y_true, y_pred, y_pred_cluster):
+    y_true = y_true.astype(np.int64)
+    assert y_pred_cluster.size == y_true.size
+    D = max(y_pred_cluster.max(), y_true.max()) + 1
+    w = np.zeros((D, D), dtype=np.int64)
+    for i in range(y_pred_cluster.size):
+        w[y_pred[i], y_true[i]] += 1
+    ind = linear_assignment(w.max() - w)
+    c_loss = sum([w[i, j] for i, j in ind]) * 1.0 / y_pred_cluster.size
+    print(f"Cluster Loss {c_loss} on {y_pred_cluster.size} clusters")
+    return c_loss
+
+# %%
+from linear_assignment import linear_assignment
+
 def cluster_loss(clustering:str, n_clusters: int):
     def loss(y_true, y_pred):
         y_pred_cluster, _ = do_clustering(clustering, n_clusters, y)
-        y_true = y_true.astype(np.int64)
-        assert y_pred_cluster.size == y_true.size
-        D = max(y_pred_cluster.max(), y_true.max()) + 1
-        w = np.zeros((D, D), dtype=np.int64)
-        for i in range(y_pred_cluster.size):
-            w[y_pred[i], y_true[i]] += 1
-        ind = linear_assignment(w.max() - w)
-        c_loss = sum([w[i, j] for i, j in ind]) * 1.0 / y_pred_cluster.size
-        print(f"Cluster Loss {c_loss} on {y_pred_cluster.size} clusters")
+        return cluster_acc(y_true, y_pred, y_pred_cluster)
     return loss
 
 # %%
@@ -599,8 +628,8 @@ def train(x: DataFrame,
                 nmi = np.round(metrics.nmi(y, y_pred), 5)
                 ari = np.round(metrics.ari(y, y_pred), 5)
                 loss = np.round(loss, 5)
-                print('Iter %d: acc = %.5f, nmi = %.5f, ari = %.5f' %
-                    (ite, acc, nmi, ari), ' ; loss=', loss)
+                print(f'Iter: {ite} Acc = {acc:.5f}, nmi = {nmi:.5f}, '
+                      f'ari = {ari:.5f} ; loss={loss}')
 
             # check stop criterion
             delta_label = np.sum(y_pred != y_pred_last).astype(
@@ -844,8 +873,8 @@ def evaluate_model(run_name: str, n_clusters: int, eval_size: int,
         nmi = np.round(metrics.nmi(y, y_pred), 5)
         ari = np.round(metrics.ari(y, y_pred), 5)
         loss = np.round(loss, 5)
-        print('Acc = %.5f, nmi = %.5f, ari = %.5f' %
-            (acc, nmi, ari), ' ; loss=', loss)
+        print(f'Acc = {acc:.5f}, nmi = {nmi:.5f}, ari = {ari:.5f}'
+              f' ; loss={loss}')
 
     # confusion matrix
     cm_width = max(8, len(np.unique(y_pred)) * 2)
@@ -926,8 +955,8 @@ def make_and_evaluate_model(run_name, train_size, eval_size, n_clusters, entity_
         n_clusters: number of clusters to use.
         entity_count: number of entities to use.
     """
-    make_model(run_name, data_rows=train_size, n_clusters=n_clusters, entity_count=entity_count)
-    evaluate_model(run_name, data_rows=eval_size, n_clusters=n_clusters)
+    make_model(run_name, train_size=train_size, n_clusters=n_clusters, entity_count=entity_count)
+    evaluate_model(run_name, eval_size=eval_size, n_clusters=n_clusters)
 
 # %%
 stop
@@ -965,7 +994,7 @@ make_and_evaluate_model('test1', train_size=10000, eval_size=10000, n_clusters=2
 make_and_evaluate_model('test1-2', train_size=10000, eval_size=10000, n_clusters=25, entity_count=0)
 
 # %%
-evaluate_model('test1-2', data_rows=10000, n_clusters=25, include_none=True)
+evaluate_model('test1-2', eval_size=10000, n_clusters=25, include_none=True)
 
 # %%
 make_model('test1', cluster="GMM", data_rows=1000, entity_count=0, n_clusters=20 )
@@ -1021,9 +1050,153 @@ evaluate_model('reset-metrics-dbscan',
 
 
 # %% [markdown]
-# # encode then cluster
+# # benchmark
 
 # %%
+# optimal eps https://iopscience.iop.org/article/10.1088/1755-1315/31/1/012012/pdf
 
+from sklearn.neighbors import NearestNeighbors
+
+def optimal_eps(X, n_neighbors=10):
+    neigh = NearestNeighbors(n_neighbors=2)
+    nbrs = neigh.fit(X)
+    distances, indices = nbrs.kneighbors(X)
+    distances = np.sort(distances, axis=0)
+    distances = distances[:,1]
+    plt.plot(distances)
+
+# %%
+def cluster_score(y, y_pred, n_clusters):
+    """
+    Compute the cluster score.
+    Arguments:
+        y: true labels.
+        y_pred: predicted labels.
+        n_clusters: number of clusters.
+    Returns:
+        cluster score.
+    """
+    # compute the cluster score
+    score = 0
+    for i in range(n_clusters):
+        score += np.sum(y_pred[y==i]==i)
+    return score/len(y)
+
+# %%
+def hypertune_density_clustering():
+    """
+    hypertune the density clustering algorithms.
+    """
+    eps_vals = [30000.0, 40000.0, 50000.0]
+    x, y, mapping, strings = load_data(
+                                    1000,
+                                    oversample=True,
+                                    get_text=True)
+    print(f"Optimal epsilon: {optimal_eps(x)}")
+    for eps in eps_vals:
+        # predict cluster labels
+        print(f"Predicting...for epsilon={eps}")
+        y_pred, _ = do_clustering('DBSCAN', 25, x, params={'eps':eps})
+        print(f"ACC: {cluster_score(y, y_pred, 25)}")
+        # confusion matrix
+        cm_width = max(8, len(np.unique(y_pred)) * 2)
+        cm_width = min(16, cm_width)
+        plot_confusion(y, y_pred, mapping, size=cm_width, save_dir=None, details=False)
+
+# %%
+hypertune_density_clustering()
+
+# %%
+def run_benchmark(cluster:str, eval_size:int, n_clusters:int):
+    x, y, mapping, strings = load_data(
+                                    eval_size,
+                                    oversample=False,
+                                    get_text=True)
+    save_dir = f'./results/bm/{cluster}'
+    if not os.path.exists(save_dir):
+        # create save dir
+        os.makedirs(save_dir)
+
+    
+    # predict cluster labels
+    print("Predicting...")
+    y_pred, _ = do_clustering(cluster, n_clusters, x)
+    # print(f"ACC: {cluster_acc(y, y_pred)}")
+    
+    # confusion matrix
+    cm_width = max(8, len(np.unique(y_pred)) * 2)
+    cm_width = min(16, cm_width)
+    plot_confusion(y, y_pred, mapping, save_dir, cm_width)
+
+    # show wordclouds for each cluster
+    print ("BENCHMARK CLUSTERS")
+    clusters = {}
+    predicted = DataFrame({'text':strings, 'y_pred':y_pred, 'y_true':y})
+    for cluster_no in range(n_clusters):
+        y_pred_for_key = predicted[predicted['y_pred']==cluster_no]
+        true_label = 'UNKNOWN'
+        modal_value = y_pred_for_key['y_true'].mode()
+        if len(modal_value)>0:
+            if modal_value[0] in mapping:
+                true_label = mapping[modal_value[0]]
+            # confidence - fraction of this cluster that is actually this cluster
+            y_true_this_cluster = len(
+                y_pred_for_key[y_pred_for_key['y_true']==modal_value[0]])
+            frac = y_true_this_cluster/len(y_pred_for_key)
+        else:
+            frac = 0
+
+        # wordcloud
+        unique, counts = np.unique(y_pred_for_key['text'], return_counts=True)
+        freq_list = np.asarray((unique, counts)).T
+        freq_list =  sorted(freq_list, key=lambda x: -x[1])[0:50]
+        freqs = {w: f for w,f in freq_list}
+        entry = {'freqs':freqs, 'frac':frac, 'n':len(y_pred_for_key)}
+        if true_label == 'UNKNOWN':
+            clusters[f"UNK-{cluster_no}"] = entry
+        elif true_label in clusters:
+            if clusters[true_label]['frac'] < frac:
+                # we found a better cluster for this label
+                clusters[true_label] = entry
+            else:
+                # this cluster is worse than this one, so it's unknown
+                clusters[f"UNK-{cluster_no} Was {true_label}"] = entry
+        else:
+            clusters[true_label] = entry
+
+    cluster_list = [{
+        **clusters[c],
+        'name': c,
+        'idx': idx} for idx, c in enumerate(clusters)]
+    cluster_list = sorted(cluster_list, key=lambda x: -x['frac'])
+
+    display_list = []
+    # show unknown clusters first
+    for i, cluster in enumerate(cluster_list):
+        if cluster['name'][0:3] == "UNK":
+            save_file = os.path.join(save_dir,
+                                     f"wordcloud-{cluster['name']}.png")
+            show_wordcloud(i, cluster, save_file, save_only=True)
+            display_list.append(cluster)
+
+    # next show known clusters
+    for i, cluster in enumerate(cluster_list):
+        if cluster['name'][0:3] != "UNK":
+            save_file = os.path.join(save_dir,
+                                     f"wordcloud-{cluster['name']}.png")
+            show_wordcloud(i, cluster, save_file, save_only=True)
+            display_list.append(cluster)
+
+    
+    print(write_results_page(display_list, save_dir, cluster))
+
+# %%
+run_benchmark('Kmeans', 10000, 25)
+
+# %%
+run_benchmark('GMM', 10000, 25)
+
+# %%
+run_benchmark('agg', 10000, 25)
 
 
