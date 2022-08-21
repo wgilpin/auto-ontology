@@ -32,7 +32,7 @@ def get_sample_conll_hf(length: int = 0) -> list[str]:
 
     dataset = load_dataset("conll2003")
     if length <= 0:
-        length = len(dataset)
+        length = len(dataset['train'])
     length = min(length, len(dataset['train']))
 
     lines = []
