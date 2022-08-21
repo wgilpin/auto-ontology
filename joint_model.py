@@ -380,6 +380,7 @@ import metrics
 from pandas import DataFrame
 from metrics import plot_confusion
 from IPython.display import Image
+from tensorflow.keras import models
 from keras.utils import plot_model
 from tqdm import tqdm
 from tensorflow.keras.layers import Dense, Input, Layer, InputSpec
@@ -514,7 +515,6 @@ def target_distribution(q):
 
 
 # %%
-from tabnanny import verbose
 from sklearn.cluster import KMeans, DBSCAN, OPTICS, AgglomerativeClustering
 from sklearn import mixture
 from scipy.stats import multivariate_normal
@@ -601,56 +601,6 @@ def cluster_loss(clustering:str, n_clusters: int):
     return loss
 
 # %%
-def train(x: DataFrame,
-          y: DataFrame,
-          y_pred_last: DataFrame,
-          batch_size: int,
-          model: Model,
-          save_dir: str,
-          use_cluster_loss: bool=False):
-    loss = 0
-    index = 0
-    maxiter = 8000
-    update_interval = 140
-    index_array = np.arange(x.shape[0])
-    tol = 0.001  # tolerance threshold to stop training
-
-    for ite in range(int(maxiter)):
-        if ite % update_interval == 0:
-            q, _ = model.predict(x, verbose=0)
-            # update the auxiliary target distribution p
-            p = target_distribution(q)
-
-            # evaluate the clustering performance
-            y_pred = q.argmax(1)
-            if y is not None:
-                acc = np.round(metrics.acc(y, y_pred), 5)
-                nmi = np.round(metrics.nmi(y, y_pred), 5)
-                ari = np.round(metrics.ari(y, y_pred), 5)
-                loss = np.round(loss, 5)
-                print(f'Iter: {ite} Acc = {acc:.5f}, nmi = {nmi:.5f}, '
-                      f'ari = {ari:.5f} ; loss={loss}')
-
-            # check stop criterion
-            delta_label = np.sum(y_pred != y_pred_last).astype(
-                np.float32) / y_pred.shape[0]
-            y_pred_last = np.copy(y_pred)
-            if ite > 0 and delta_label < tol:
-                print('delta_label ', delta_label, '< tol ', tol)
-                print('Reached tolerance threshold. Stopping training.')
-                break
-        idx = index_array[index *
-                        batch_size: min((index+1) * batch_size, x.shape[0])]
-        loss = model.train_on_batch(x=x[idx], y=[p[idx], x[idx]], reset_metrics=True,)
-        try:
-            index = index + 1 if (index + 1) * batch_size <= x.shape[0] else 0
-        except:
-            print('e')
-
-    model.save_weights(os.path.join(save_dir, 'DEC_model_final.h5'))
-    return loss
-
-# %%
 # write_messages.py
 
 from jinja2 import Environment, FileSystemLoader
@@ -694,285 +644,379 @@ def show_wordcloud(i: int, cluster: dict, filepath: str, width: int=16, save_onl
         print(f"No words for cluster {cluster}")
 
 # %%
-entity_filter_list = ['GPE', 'PERSON', 'ORG', 'DATE', 'NORP', 'TIME',
-    'PERCENT', 'LOC', 'QUANTITY', 'MONEY', 'FAC', 'CARDINAL', 'EVENT',
-    'PRODUCT', 'WORK_OF_ART', 'ORDINAL', 'LANGUAGE']
+ENTITY_FILTER_LIST = ['GPE', 'PERSON', 'ORG', 'DATE', 'NORP',
+    'TIME', 'PERCENT', 'LOC', 'QUANTITY', 'MONEY', 'FAC', 'CARDINAL',
+    'EVENT', 'PRODUCT', 'WORK_OF_ART', 'ORDINAL', 'LANGUAGE']
 
-def make_data(
-            train_size: int,
-            entities: list[str]=None,
-            entity_count: int=0,
-            oversample: bool=True): 
-    
-    if entities is not None and entity_count > 0:
-        print("ERROR: Don't use both entities and entity_count")
-        return
-    if entities is None:
-        if entity_count==0:
-            entities = entity_filter_list
-        else:
-            entities = entity_filter_list[:entity_count]
-    print("Load Data")
-    x, y, mapping, strings = load_data(
-                                train_size,
-                                entity_filter=entities,
-                                get_text=True,
-                                oversample=oversample)
-    print("Data Loaded")   
+class DeepCluster():
 
-    return x, y, mapping, strings
+    def __init__(
+                self,
+                run_name: str,
+                train_size: int,
+                num_clusters: int,
+                cluster: str="GMM",
+                entities: list[str]=None,
+                entity_count: int=0,
+                dims: list[int] = None,
+                ):
 
+        self.cluster = cluster
+        self.num_clusters = num_clusters
 
-# %%
-
-
-def make_model(run_name: str, n_clusters: int, train_size: int,
-        entities: list[str]=None, entity_count: int=0, 
-        cluster:str = "GMM", include_none: bool=False,):
-    """
-    Run the model.
-
-    Arguments:
-        run_name: name of the run.
-        data_rows: number of rows to use from the data.
-        extra_clusters: number of extra clusters to add to the model.
-        entities: list of entities to use.
-        entity_count: number of entities to use.
-    """
-    x, y, mapping, strings = make_data(
-                                    train_size,
-                                    entities,
-                                    entity_count,
-                                    oversample=True)
-
-    print("Data Loaded")   
-
-    max_iter = 140
-    dims = [x.shape[-1], 500, 500, 2000, 50]
-    init = VarianceScaling(
-                        mode='fan_in',
-                        scale=1. / 3.,
-                        distribution='uniform')
-    pretrain_optimizer = 'adam'# SGD(learning_rate=1, momentum=0.9)
-    pretrain_epochs = 300
-    batch_size = 256
-    save_dir = f'./results/{run_name}'
-    if not os.path.exists(save_dir):
-        # create save dir
-        os.makedirs(save_dir)
-    autoencoder, encoder = autoencoder_model(dims, init_fn=init)
-    autoencoder.compile(
-        optimizer=pretrain_optimizer,
-        loss=['mse'])
-
-    early_stopping_cb = EarlyStopping(
-        monitor='loss', patience=5, verbose=1, min_delta=0.0003)
-    print("Training autoencoder")
-    history = autoencoder.fit(x, x,
-                            batch_size=batch_size,
-                            epochs=pretrain_epochs, 
-                            verbose=0,
-                            callbacks=[early_stopping_cb])
-    autoencoder.save_weights(os.path.join(save_dir, 'jae_weights.h5'))
-    print("Trained autoencoder")
-    # summarize history for loss
-    plt.plot(history.history['loss'])
-    plt.title('Autoencoder pretraining loss')
-    plt.ylabel('loss')
-    plt.xlabel('epoch')
-    plt.show()
-
-    clustering_layer = ClusteringLayer(
-        n_clusters, name='clustering')(encoder.output)
-    model = Model(inputs=encoder.input,
-                outputs=[clustering_layer, autoencoder.output])
-    model.compile(
-        loss=['kld', 'mse', cluster_loss(cluster, n_clusters)],
-        loss_weights=[0.3, 1, 0.2],
-        optimizer=SGD(learning_rate=1, momentum=0.9))
-    img_file = os.path.join(save_dir, 'model.png')
-    plot_model(model, to_file=img_file, show_shapes=True)
-    Image(filename=img_file)
-
-    loss = 0
-
-    # init cluster centres
-    print("cluster init")
-    if x.shape[0] > 10000:
-        x_sample = x[np.random.choice(x.shape[0], 100, replace=False)]
-    else:
-        x_sample = x
-    y_pred, centers = do_clustering(
-        'GMM' if cluster=='GMM' else 'Kmeans',
-        n_clusters,
-        encoder.predict(x_sample))
-    del x_sample
-    model.get_layer(name='clustering').set_weights([centers])
-    y_pred_last = np.copy(y_pred)
-    print("cluster init done")
-
-    # train
-    train(x, y, y_pred_last, batch_size, model, save_dir)
-    print("Training Done")
-
-
-# %%
-
-def evaluate_model(run_name: str, n_clusters: int, eval_size: int, 
-        cluster:str = "Kmeans", include_none: bool=True,):
-    """
-    Run the model.
-
-    Arguments:
-        run_name: name of the run.
-        data_rows: number of rows to use from the data.
-        n_clusters: number of clusters to use.
-        cluster: clustering algorithm to use.
-        include_none: include unknown noun-chunks in the data.
-    """
-    print("Load Data")
-    x, y, mapping, strings = load_data(
-                                eval_size,
-                                get_text=True)
-    print("Data Loaded")   
-
-    max_iter = 140
-    dims = [x.shape[-1], 500, 500, 2000, 50]
-    save_dir = f'./results/{run_name}'
-    if not os.path.exists(save_dir):
-        # create save dir
-        os.makedirs(save_dir)
-
-    autoencoder, encoder = autoencoder_model(dims)
-    ae_weights_file = os.path.join(save_dir, 'jae_weights.h5')
-    print(f"Loading AE weights from {ae_weights_file}")
-    autoencoder.load_weights(ae_weights_file)
-    
-    clustering_layer = ClusteringLayer(
-        n_clusters, name='clustering')(encoder.output)
-    model = Model(inputs=encoder.input,
-                outputs=[clustering_layer, autoencoder.output])
-
-    loss = 0
-    
-    model_weights_file = os.path.join(save_dir, 'DEC_model_final.h5')
-    print(f"Loading model weights from {model_weights_file}")
-    model.load_weights(model_weights_file)
-    
-    # predict cluster labels
-    print("Predicting...")
-    q, _ = model.predict(x, verbose=1)
-    p = target_distribution(q)  # update the auxiliary target distribution p
-
-
-    # evaluate the clustering performance
-    print("Evaluating...")
-    y_pred = q.argmax(1)
-    if y is not None:
-        acc = np.round(metrics.acc(y, y_pred), 5)
-        nmi = np.round(metrics.nmi(y, y_pred), 5)
-        ari = np.round(metrics.ari(y, y_pred), 5)
-        loss = np.round(loss, 5)
-        print(f'Acc = {acc:.5f}, nmi = {nmi:.5f}, ari = {ari:.5f}'
-              f' ; loss={loss}')
-
-    # confusion matrix
-    cm_width = max(8, len(np.unique(y_pred)) * 2)
-    cm_width = min(16, cm_width)
-    plot_confusion(y, y_pred, mapping, save_dir, cm_width)
-
-    # show wordclouds for each cluster
-    print ("CLUSTERS")
-    clusters = {}
-    predicted = DataFrame({'text':strings, 'y_pred':y_pred, 'y_true':y})
-    for cluster_no in tqdm(range(n_clusters)):
-        y_pred_for_key = predicted[predicted['y_pred']==cluster_no]
-        true_label = 'UNKNOWN'
-        modal_value = y_pred_for_key['y_true'].mode()
-        if len(modal_value)>0:
-            if modal_value[0] in mapping:
-                true_label = mapping[modal_value[0]]
-            # confidence - fraction of this cluster that is actually this cluster
-            y_true_this_cluster = len(
-                y_pred_for_key[y_pred_for_key['y_true']==modal_value[0]])
-            frac = y_true_this_cluster/len(y_pred_for_key)
-        else:
-            frac = 0
-
-        # wordcloud
-        unique, counts = np.unique(y_pred_for_key['text'], return_counts=True)
-        freq_list = np.asarray((unique, counts)).T
-        freq_list =  sorted(freq_list, key=lambda x: -x[1])[0:50]
-        freqs = {w: f for w,f in freq_list}
-        entry = {'freqs':freqs, 'frac':frac, 'n':len(y_pred_for_key)}
-        if true_label == 'UNKNOWN':
-            clusters[f"UNK-{cluster_no}"] = entry
-        elif true_label in clusters:
-            if clusters[true_label]['frac'] < frac:
-                # we found a better cluster for this label
-                clusters[true_label] = entry
+        if entities is not None and entity_count > 0:
+            raise ValueError('entities and entity_count cannot both be specified')
+        if entities is None:
+            if entity_count==0:
+                self.entities = ENTITY_FILTER_LIST
             else:
-                # this cluster is worse than this one, so it's unknown
-                clusters[f"UNK-{cluster_no} Was {true_label}"] = entry
+                self.entities = ENTITY_FILTER_LIST[:entity_count]
         else:
-            clusters[true_label] = entry
+            self.entities = entities
+        
+        self.x = None
+        self.y = None
+        self.mapping = None
+        self.strings = None
+        self.y_pred_last = None
+        self.input_dim = 768
+        
+        self.dims = [768, 500, 500, 2000, 100] if dims is None else dims
+        self.run_name = run_name
+        self.train_size = train_size
+        self.model = None
+        self.encoder = None
+        self.autoencoder = None
+        self.save_dir = None
 
-    cluster_list = [{
-        **clusters[c],
-        'name': c,
-        'idx': idx} for idx, c in enumerate(clusters)]
-    cluster_list = sorted(cluster_list, key=lambda x: -x['frac'])
 
-    display_list = []
-    # show unknown clusters first
-    for i, cluster in enumerate(cluster_list):
-        if cluster['name'][0:3] == "UNK":
-            save_file = os.path.join(save_dir,
-                                     f"wordcloud-{cluster['name']}.png")
-            show_wordcloud(i, cluster, save_file, save_only=True)
-            display_list.append(cluster)
-
-    # next show known clusters
-    for i, cluster in enumerate(cluster_list):
-        if cluster['name'][0:3] != "UNK":
-            save_file = os.path.join(save_dir,
-                                     f"wordcloud-{cluster['name']}.png")
-            show_wordcloud(i, cluster, save_file, save_only=True)
-            display_list.append(cluster)
+    def make_data(self, oversample: bool=True) -> None:
+        
+        print("Load Data")
+        self.x, self.y, self.mapping, self.strings = load_data(
+                                    self.train_size,
+                                    entity_filter=self.entities,
+                                    get_text=True,
+                                    oversample=oversample)
+        self.input_dim = self.x.shape[1]
+        print("Data Loaded")   
 
     
-    print(write_results_page(display_list, save_dir, run_name))
+    def init_cluster_centers(self) -> None:
+        """
+        Initialize cluster centers by randomly sampling from the data.
+        """
+        print("cluster init")
+        if self.x.shape[0] > 10000:
+            x_sample = self.x[np.random.choice(self.x.shape[0], 100, replace=False)]
+        else:
+            x_sample = self.x
+        y_pred, centers = do_clustering(
+            'GMM' if self.cluster=='GMM' else 'Kmeans',
+            self.num_clusters,
+            self.encoder.predict(x_sample))
+        del x_sample
+        self.model.get_layer(name='clustering').set_weights([centers])
+        self.y_pred_last = np.copy(y_pred)
+        print("cluster init done")
+
+    def make_model(self) -> None:
+        
+        init = VarianceScaling(
+                            mode='fan_in',
+                            scale=1. / 3.,
+                            distribution='uniform')
+        pretrain_optimizer = 'adam'# SGD(learning_rate=1, momentum=0.9)
+        
+        self.autoencoder, self.encoder = autoencoder_model(self.dims, init_fn=init)
+        self.autoencoder.compile(
+            optimizer=pretrain_optimizer,
+            loss=['mse'])
+
+        
+
+        clustering_layer = ClusteringLayer(
+            self.num_clusters, name='clustering')(self.encoder.output)
+        self.model = Model(inputs=self.encoder.input,
+                    outputs=[clustering_layer, self.autoencoder.output])
+        self.model.compile(
+            loss=['kld', 'mse', cluster_loss(self.cluster, self.num_clusters)],
+            loss_weights=[0.3, 1, 0.2],
+            optimizer=SGD(learning_rate=1, momentum=0.9))
+        
+        self.save_dir = f'./results/{self.run_name}'
+        if not os.path.exists(self.save_dir):
+            # create save dir
+            os.makedirs(self.save_dir)
+        img_file = os.path.join(self.save_dir, 'model.png')
+        plot_model(self.model, to_file=img_file, show_shapes=True)
+        Image(filename=img_file)
+
+    def target_distribution(self, q):
+        weight = q ** 2 / q.sum(0)
+        return (weight.T / weight.sum(1)).T
 
 
+    
+    def train_model(self):
+        """
+        Run the model.
+        """
+        self.make_data(oversample=True)
 
-# %%
-def make_and_evaluate_model(run_name, train_size, eval_size, n_clusters, entity_count):
-    """
-    Make and evaluate a model.
-    Arguments:
-        run_name: name of the run.
-        data_rows: number of rows to use.
-        n_clusters: number of clusters to use.
-        entity_count: number of entities to use.
-    """
-    make_model(run_name, train_size=train_size, n_clusters=n_clusters, entity_count=entity_count)
-    evaluate_model(run_name, eval_size=eval_size, n_clusters=n_clusters)
+        print("Data Loaded")   
+
+        max_iter = 140
+        pretrain_epochs = 300
+        batch_size = 256
+        
+        self.make_model()
+        
+
+        print("Training autoencoder")
+        early_stopping_cb = EarlyStopping(
+            monitor='loss', patience=5, verbose=1, min_delta=0.0003)
+        history = self.autoencoder.fit(
+                                self.x,
+                                self.x,
+                                batch_size=batch_size,
+                                epochs=pretrain_epochs, 
+                                verbose=0,
+                                callbacks=[early_stopping_cb])
+        self.autoencoder.save_weights(os.path.join(self.save_dir, 'jae_weights.h5'))
+        print("Trained autoencoder")
+        # summarize history for loss
+        plt.plot(history.history['loss'])
+        plt.title('Autoencoder pretraining loss')
+        plt.ylabel('loss')
+        plt.xlabel('epoch')
+        plt.show()
+
+        # init cluster centres before train
+        self.init_cluster_centers()
+
+        # train full model
+        self.train(batch_size)
+        print("Training Done")
+
+
+    def train(self, batch_size: int):
+        loss = 0
+        index = 0
+        maxiter = 8000
+        update_interval = 140
+        index_array = np.arange(self.x.shape[0])
+        tol = 0.001  # tolerance threshold to stop training
+
+        for ite in range(int(maxiter)):
+            if ite % update_interval == 0:
+                q, _ = self.model.predict(self.x, verbose=0)
+                # update the auxiliary target distribution p
+                p = self.target_distribution(q)
+
+                # evaluate the clustering performance
+                y_pred = q.argmax(1)
+                if self.y is not None:
+                    acc = np.round(metrics.acc(self.y, y_pred), 5)
+                    nmi = np.round(metrics.nmi(self.y, y_pred), 5)
+                    ari = np.round(metrics.ari(self.y, y_pred), 5)
+                    loss = np.round(loss, 5)
+                    print(f'Iter: {ite} Acc = {acc:.5f}, nmi = {nmi:.5f}, '
+                        f'ari = {ari:.5f} ; loss={loss}')
+
+                # check stop criterion
+                delta_label = np.sum(y_pred != self.y_pred_last).astype(
+                    np.float32) / y_pred.shape[0]
+                self.y_pred_last = np.copy(y_pred)
+                if ite > 0 and delta_label < tol:
+                    print('delta_label ', delta_label, '< tol ', tol)
+                    print('Reached tolerance threshold. Stopping training.')
+                    break
+            idx = index_array[index *
+                    batch_size: min((index+1) * batch_size, self.x.shape[0])]
+            loss = self.model.train_on_batch(
+                                            x=self.x[idx],
+                                            y=[p[idx],
+                                            self.x[idx]],
+                                            reset_metrics=True,)
+            try:
+                if (index + 1) * batch_size <= self.x.shape[0]:
+                    index = index + 1
+                else:
+                    index = 0
+
+            except:
+                print('e')
+
+        self.model.save_weights(os.path.join(self.save_dir, 'DEC_model_final.h5'))
+
+    def evaluate_model(self, eval_size: int) -> None:
+        """
+        Run the model.
+        """
+        if self.train_size != eval_size:
+            print("Load Data")
+            self.x, self.y, self.mapping, self.strings = load_data(
+                                                            eval_size,
+                                                            get_text=True)
+            print("Data Loaded")   
+
+        self.make_model()
+
+        ae_weights_file = os.path.join(self.save_dir, 'jae_weights.h5')
+        print(f"Loading AE weights from {ae_weights_file}")
+        self.autoencoder.load_weights(ae_weights_file)
+        
+        loss = 0
+        
+        model_weights_file = os.path.join(self.save_dir, 'DEC_model_final.h5')
+        print(f"Loading model weights from {model_weights_file}")
+        self.model.load_weights(model_weights_file)
+        
+        # predict cluster labels
+        print("Predicting...")
+        q, _ = self.model.predict(self.x, verbose=1)
+        p = self.target_distribution(q)  # update the auxiliary target distribution p
+
+
+        # evaluate the clustering performance
+        loss = 0.0
+        print("Evaluating...")
+        y_pred = q.argmax(1)
+        if self.y is not None:
+            acc = np.round(metrics.acc(self.y, y_pred), 5)
+            nmi = np.round(metrics.nmi(self.y, y_pred), 5)
+            ari = np.round(metrics.ari(self.y, y_pred), 5)
+            loss = np.round(loss, 5)
+            print(f'Acc = {acc:.5f}, nmi = {nmi:.5f}, ari = {ari:.5f}'
+                f' ; loss={loss}')
+
+        # confusion matrix
+        cm_width = max(8, len(np.unique(y_pred)) * 2)
+        cm_width = min(16, cm_width)
+        plot_confusion(self.y, y_pred, self.mapping, self.save_dir, cm_width)
+
+        # show wordclouds for each cluster
+        print ("CLUSTERS")
+        clusters = {}
+        predicted = DataFrame({
+            'text':self.strings,
+            'y_pred':y_pred,
+            'y_true':self.y})
+        for cluster_no in tqdm(range(self.num_clusters)):
+            y_pred_for_key = predicted[predicted['y_pred']==cluster_no]
+            true_label = 'UNKNOWN'
+            modal_value = y_pred_for_key['y_true'].mode()
+            if len(modal_value)>0:
+                if modal_value[0] in self.mapping:
+                    true_label = self.mapping[modal_value[0]]
+                # confidence - fraction of this cluster that is actually this cluster
+                y_true_this_cluster = len(
+                    y_pred_for_key[y_pred_for_key['y_true']==modal_value[0]])
+                frac = y_true_this_cluster/len(y_pred_for_key)
+            else:
+                frac = 0
+
+            # wordcloud
+            unique, counts = np.unique(y_pred_for_key['text'], return_counts=True)
+            freq_list = np.asarray((unique, counts)).T
+            freq_list =  sorted(freq_list, key=lambda x: -x[1])[0:50]
+            freqs = {w: f for w,f in freq_list}
+            entry = {'freqs':freqs, 'frac':frac, 'n':len(y_pred_for_key)}
+            if true_label == 'UNKNOWN':
+                clusters[f"UNK-{cluster_no}"] = entry
+            elif true_label in clusters:
+                if clusters[true_label]['frac'] < frac:
+                    # we found a better cluster for this label
+                    clusters[true_label] = entry
+                else:
+                    # this cluster is worse than this one, so it's unknown
+                    clusters[f"UNK-{cluster_no} Was {true_label}"] = entry
+            else:
+                clusters[true_label] = entry
+
+        cluster_list = [{
+            **clusters[c],
+            'name': c,
+            'idx': idx} for idx, c in enumerate(clusters)]
+        cluster_list = sorted(cluster_list, key=lambda x: -x['frac'])
+
+        display_list = []
+        # show unknown clusters first
+        for i, cluster in enumerate(cluster_list):
+            if cluster['name'][0:3] == "UNK":
+                save_file = os.path.join(self.save_dir,
+                                        f"wordcloud-{cluster['name']}.png")
+                show_wordcloud(i, cluster, save_file, save_only=True)
+                display_list.append(cluster)
+
+        # next show known clusters
+        for i, cluster in enumerate(cluster_list):
+            if cluster['name'][0:3] != "UNK":
+                save_file = os.path.join(self.save_dir,
+                                        f"wordcloud-{cluster['name']}.png")
+                show_wordcloud(i, cluster, save_file, save_only=True)
+                display_list.append(cluster)
+
+        
+        print(write_results_page(display_list, self.save_dir, self.run_name))
+
+    def train_and_evaluate_model(self, eval_size):
+        """
+        Make and evaluate a model.
+        Arguments:
+            run_name: name of the run.
+            data_rows: number of rows to use.
+            n_clusters: number of clusters to use.
+            entity_count: number of entities to use.
+        """
+        self.make_model()
+        self.train_model()
+        self.evaluate_model(eval_size)
+
 
 # %%
 stop
 
-# %%
-%history -g -f jupyter_history3.py
-
 # %% [markdown]
 # # Evaluate
+
+# %%
+
+dc = DeepCluster('test-0-40latent', dims=[768, 500, 500, 2000, 40],
+    entity_count=10, train_size=0, num_clusters=25).train_and_evaluate_model(10000)
+
+# %%
+dc = DeepCluster('test1', train_size=0, num_clusters=25).train_and_evaluate_model(10000)
+
+# %%
+# %history -g -f jupyter_history3.py
 
 # %%
 make_data(10000, oversample=False)
 "Done"
 
 # %%
-make_model('test-none-10k', train_size=10000, n_clusters=25, entity_count=10)
+dc = DeepCluster('test-0', entity_count=10, train_size=0, num_clusters=25).train_and_evaluate_model(10000)
+
+
+# %%
+train_and_evaluate_model('test-none-3k', train_size=3000, eval_size=10000, n_clusters=25, entity_count=10)
+
+
+# %%
+model = evaluate_model('test-none-3k', eval_size=10000, n_clusters=25)
+
+
+# %%
+
+serialise_model(model, 'test-none-3k')
+
+# %%
+models.load_model('./results/test-none-3k')
+
+# %%
+train_model('test-none-10k', train_size=10000, n_clusters=25, entity_count=10)
 
 
 # %%
@@ -984,23 +1028,23 @@ evaluate_model('test-none-30', train_size=30, eval_size=1000, n_clusters=25)
 
 
 # %%
-make_and_evaluate_model('test3', train_size=1000, eval_size=10000, n_clusters=25, entity_count=10)
+train_and_evaluate_model('test3', train_size=1000, eval_size=10000, n_clusters=25, entity_count=10)
 
 
 # %%
-make_and_evaluate_model('test1', train_size=10000, eval_size=10000, n_clusters=25, entity_count=0)
+train_and_evaluate_model('test1', train_size=10000, eval_size=10000, n_clusters=25, entity_count=0)
 
 # %%
-make_and_evaluate_model('test1-2', train_size=10000, eval_size=10000, n_clusters=25, entity_count=0)
+train_and_evaluate_model('test1-2', train_size=10000, eval_size=10000, n_clusters=25, entity_count=0)
 
 # %%
-evaluate_model('test1-2', eval_size=10000, n_clusters=25, include_none=True)
+evaluate_model('test1-2', eval_size=10000, n_clusters=25, include_unclass=True)
 
 # %%
-make_model('test1', cluster="GMM", data_rows=1000, entity_count=0, n_clusters=20 )
+train_model('test1', cluster="GMM", data_rows=1000, entity_count=0, n_clusters=20 )
 
 # %%
-make_model('test1', cluster="GMM", data_rows=1000, entity_count=0, n_clusters=20 )
+train_model('test1', cluster="GMM", data_rows=1000, entity_count=0, n_clusters=20 )
 
 
 # %%
@@ -1010,32 +1054,32 @@ evaluate_model('test1', data_rows=1000, n_clusters=20 )
 evaluate_model('test1', data_rows=1000, entity_count=0, n_clusters=20 )
 
 # %%
-make_and_evaluate_model('test2', train_size=10000, eval_size=10000, n_clusters=15, entity_count=10)
+train_and_evaluate_model('test2', train_size=10000, eval_size=10000, n_clusters=15, entity_count=10)
 
 # %%
-make_model('reset-metrics', cluster='Kmeans', data_rows=1000, entity_count=0, n_clusters=20 )
-
-
-# %%
-make_model('reset-metrics', cluster='Kmeans', data_rows=10000, entity_count=10, n_clusters=15 )
+train_model('reset-metrics', cluster='Kmeans', data_rows=1000, entity_count=0, n_clusters=20 )
 
 
 # %%
-make_model('reset-metrics-dbscan', cluster="DBSCAN", data_rows=1000, entity_count=0, n_clusters=20 )
+train_model('reset-metrics', cluster='Kmeans', data_rows=10000, entity_count=10, n_clusters=15 )
 
 
 # %%
-make_model('reset-metrics-dbscan', cluster="DBSCAN", data_rows=1000, entity_count=10, n_clusters=15)
+train_model('reset-metrics-dbscan', cluster="DBSCAN", data_rows=1000, entity_count=0, n_clusters=20 )
+
+
+# %%
+train_model('reset-metrics-dbscan', cluster="DBSCAN", data_rows=1000, entity_count=10, n_clusters=15)
 
 
 # %%
 
 
 # %%
-make_model('reset-metrics-dbscan', cluster="OPTICS", data_rows=1000, entity_count=0, n_clusters=20 )
+train_model('reset-metrics-dbscan', cluster="OPTICS", data_rows=1000, entity_count=0, n_clusters=20 )
 
 # %%
-make_model('reset-metrics-optics', cluster="OPTICS", data_rows=1000, entity_count=10, n_clusters=15 )
+train_model('reset-metrics-optics', cluster="OPTICS", data_rows=1000, entity_count=10, n_clusters=15 )
 
 
 # %%
