@@ -1,6 +1,5 @@
 # %%
 # Perform standard imports
-from tracemalloc import start
 from typing import Tuple
 import pandas as pd
 import spacy
