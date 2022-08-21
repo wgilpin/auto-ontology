@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Ontologise</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+  </head>
+<body>
+    <section class="section">
+
+        <h1 class="title">Ontologies</h1>
+        <form action = "parse" method = "POST">
+          <textarea 
+            name="urls"
+            class="textarea" 
+            placeholder="Paste BBC news URLs">{% for url in urls%}{{url}}<br>{% endfor %}</textarea> 
+          <button type="submit" class="button is-primary">Go</button>
+        </form>
+    </section>
+    <section class="section">
+      Extracted {{ num_sents }} sentences from {{ num_urls }} URLs
+    </section>
+</body>
