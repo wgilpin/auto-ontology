@@ -5,19 +5,19 @@ from sklearn.pipeline import Pipeline
 from transformers import AutoTokenizer, pipeline, logging
 from transformers import TFDistilBertModel
 
-from timer import timer
-
 logging.set_verbosity_error()
 
 _PIPE = None
 
-@timer
 def get_pipe(
         name: str='distilbert-base-uncased',
         model_name: type=TFDistilBertModel) -> Pipeline:
+    """
+    Get or create a BERT pipeline.
+    """
     global _PIPE
     if _PIPE:
-            return _PIPE
+        return _PIPE
 
     model = model_name.from_pretrained(name)
     tokenizer = AutoTokenizer.from_pretrained(name)
