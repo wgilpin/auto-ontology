@@ -391,6 +391,8 @@ from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.cluster import KMeans
 from data import load_data
 from wordcloud import WordCloud
+import seaborn as sns
+
 
 # %%
 def autoencoder_model(layer_specs: list, act: str='tanh', init_fn: str='glorot_uniform'):
@@ -518,6 +520,7 @@ def target_distribution(q):
 from sklearn.cluster import KMeans, DBSCAN, OPTICS, AgglomerativeClustering
 from sklearn import mixture
 from scipy.stats import multivariate_normal
+from sklearn.manifold import TSNE
 
 
 def do_clustering(clustering: str, n_clusters: int, z_state: DataFrame, params={}):
@@ -644,6 +647,9 @@ def show_wordcloud(i: int, cluster: dict, filepath: str, width: int=16, save_onl
         print(f"No words for cluster {cluster}")
 
 # %%
+import warnings 
+warnings.filterwarnings("ignore")
+
 ENTITY_FILTER_LIST = ['GPE', 'PERSON', 'ORG', 'DATE', 'NORP',
     'TIME', 'PERCENT', 'LOC', 'QUANTITY', 'MONEY', 'FAC', 'CARDINAL',
     'EVENT', 'PRODUCT', 'WORK_OF_ART', 'ORDINAL', 'LANGUAGE']
@@ -659,6 +665,8 @@ class DeepCluster():
                 entities: list[str]=None,
                 entity_count: int=0,
                 dims: list[int] = None,
+                loss_weights: list[float] = None,
+                maxiter:int=8000,
                 ):
 
         self.cluster = cluster
@@ -680,33 +688,41 @@ class DeepCluster():
         self.strings = None
         self.y_pred_last = None
         self.input_dim = 768
+        self.batch_size = 256
         
         self.dims = [768, 500, 500, 2000, 100] if dims is None else dims
+        self.loss_weights = loss_weights
         self.run_name = run_name
         self.train_size = train_size
+        self.maxiter = maxiter
         self.model = None
         self.encoder = None
         self.autoencoder = None
         self.save_dir = None
+        self.verbose = 1
 
+    def output(self, s:str)->None:
+        if self.verbose > 0:
+            print(s)
 
     def make_data(self, oversample: bool=True) -> None:
         
-        print("Load Data")
+        self.output("Load Data")
         self.x, self.y, self.mapping, self.strings = load_data(
                                     self.train_size,
                                     entity_filter=self.entities,
                                     get_text=True,
-                                    oversample=oversample)
+                                    oversample=oversample,
+                                    verbose=self.verbose)
         self.input_dim = self.x.shape[1]
-        print("Data Loaded")   
+        self.output("Data Loaded")   
 
     
     def init_cluster_centers(self) -> None:
         """
         Initialize cluster centers by randomly sampling from the data.
         """
-        print("cluster init")
+        self.output("cluster init")
         if self.x.shape[0] > 10000:
             x_sample = self.x[np.random.choice(self.x.shape[0], 100, replace=False)]
         else:
@@ -718,7 +734,7 @@ class DeepCluster():
         del x_sample
         self.model.get_layer(name='clustering').set_weights([centers])
         self.y_pred_last = np.copy(y_pred)
-        print("cluster init done")
+        self.output("cluster init done")
 
     def make_model(self) -> None:
         
@@ -734,15 +750,18 @@ class DeepCluster():
             loss=['mse'])
 
         
-
         clustering_layer = ClusteringLayer(
-            self.num_clusters, name='clustering')(self.encoder.output)
+                            self.num_clusters,
+                            alpha=0.9,
+                            name='clustering')(self.encoder.output)
         self.model = Model(inputs=self.encoder.input,
                     outputs=[clustering_layer, self.autoencoder.output])
         self.model.compile(
             loss=['kld', 'mse', cluster_loss(self.cluster, self.num_clusters)],
-            loss_weights=[0.3, 1, 0.2],
-            optimizer=SGD(learning_rate=1, momentum=0.9))
+            loss_weights= [0.3, 1.0, 0.4] if 
+                self.loss_weights is None else self.loss_weights,
+            optimizer=SGD(learning_rate=0.5, momentum=0.9))
+        self.output("model compiled")
         
         self.save_dir = f'./results/{self.run_name}'
         if not os.path.exists(self.save_dir):
@@ -764,51 +783,50 @@ class DeepCluster():
         """
         self.make_data(oversample=True)
 
-        print("Data Loaded")   
+        self.output("Data Loaded")   
 
         max_iter = 140
         pretrain_epochs = 300
-        batch_size = 256
         
         self.make_model()
         
 
-        print("Training autoencoder")
+        self.output("Training autoencoder")
         early_stopping_cb = EarlyStopping(
             monitor='loss', patience=5, verbose=1, min_delta=0.0003)
         history = self.autoencoder.fit(
                                 self.x,
                                 self.x,
-                                batch_size=batch_size,
+                                batch_size=self.batch_size,
                                 epochs=pretrain_epochs, 
                                 verbose=0,
                                 callbacks=[early_stopping_cb])
         self.autoencoder.save_weights(os.path.join(self.save_dir, 'jae_weights.h5'))
-        print("Trained autoencoder")
-        # summarize history for loss
-        plt.plot(history.history['loss'])
-        plt.title('Autoencoder pretraining loss')
-        plt.ylabel('loss')
-        plt.xlabel('epoch')
-        plt.show()
+        self.output("Trained autoencoder")
+        if self.verbose > 0:
+            # summarize history for loss
+            plt.plot(history.history['loss'])
+            plt.title('Autoencoder pretraining loss')
+            plt.ylabel('loss')
+            plt.xlabel('epoch')
+            plt.show()
 
         # init cluster centres before train
         self.init_cluster_centers()
 
         # train full model
-        self.train(batch_size)
+        self.train()
         print("Training Done")
 
 
-    def train(self, batch_size: int):
+    def train(self):
         loss = 0
         index = 0
-        maxiter = 8000
         update_interval = 140
         index_array = np.arange(self.x.shape[0])
         tol = 0.001  # tolerance threshold to stop training
 
-        for ite in range(int(maxiter)):
+        for ite in range(int(self.maxiter)):
             if ite % update_interval == 0:
                 q, _ = self.model.predict(self.x, verbose=0)
                 # update the auxiliary target distribution p
@@ -821,26 +839,27 @@ class DeepCluster():
                     nmi = np.round(metrics.nmi(self.y, y_pred), 5)
                     ari = np.round(metrics.ari(self.y, y_pred), 5)
                     loss = np.round(loss, 5)
-                    print(f'Iter: {ite} Acc = {acc:.5f}, nmi = {nmi:.5f}, '
-                        f'ari = {ari:.5f} ; loss={loss}')
+                    self.output(f'Iter: {ite} Acc = {acc:.5f}, nmi = {nmi:.5f}, '
+                                f'ari = {ari:.5f} ; loss={loss}')
 
                 # check stop criterion
                 delta_label = np.sum(y_pred != self.y_pred_last).astype(
                     np.float32) / y_pred.shape[0]
                 self.y_pred_last = np.copy(y_pred)
                 if ite > 0 and delta_label < tol:
-                    print('delta_label ', delta_label, '< tol ', tol)
-                    print('Reached tolerance threshold. Stopping training.')
+                    self.output(f'delta_label {delta_label} < tol {tol}')
+                    self.output('Reached tolerance threshold. Stopping training.')
                     break
-            idx = index_array[index *
-                    batch_size: min((index+1) * batch_size, self.x.shape[0])]
+            idx = index_array[
+                    index * self.batch_size : 
+                    min((index+1) * self.batch_size, self.x.shape[0])]
             loss = self.model.train_on_batch(
                                             x=self.x[idx],
                                             y=[p[idx],
                                             self.x[idx]],
                                             reset_metrics=True,)
             try:
-                if (index + 1) * batch_size <= self.x.shape[0]:
+                if (index + 1) * self.batch_size <= self.x.shape[0]:
                     index = index + 1
                 else:
                     index = 0
@@ -848,60 +867,71 @@ class DeepCluster():
             except:
                 print('e')
 
+        if self.verbose == 0:
+            # final values
+            print(f'Iter: {ite} Acc = {acc:.5f}, nmi = {nmi:.5f}, '
+                    f'ari = {ari:.5f} ; loss={loss}')
         self.model.save_weights(os.path.join(self.save_dir, 'DEC_model_final.h5'))
+
+    def cluster_pred_acc(self):
+        NER_only= DataFrame({'y':self.y, 'y_clus':self.y_pred})
+        unk_idx = [k for k, v in self.mapping.items() if v == 'UNKNOWN'][0]
+        NER_only.drop(NER_only.index[NER_only['y']==unk_idx], inplace=True)
+        NER_match = NER_only[NER_only['y']==NER_only['y_clus']]
+        # fraction that match
+        frac = NER_match.shape[0]/NER_only.shape[0]
+        return frac
 
     def evaluate_model(self, eval_size: int) -> None:
         """
         Run the model.
         """
         if self.train_size != eval_size:
-            print("Load Data")
+            self.output("Load Data")
             self.x, self.y, self.mapping, self.strings = load_data(
                                                             eval_size,
                                                             get_text=True)
-            print("Data Loaded")   
+            self.output("Data Loaded")   
 
         self.make_model()
 
         ae_weights_file = os.path.join(self.save_dir, 'jae_weights.h5')
-        print(f"Loading AE weights from {ae_weights_file}")
+        self.output(f"Loading AE weights from {ae_weights_file}")
         self.autoencoder.load_weights(ae_weights_file)
         
-        loss = 0
-        
         model_weights_file = os.path.join(self.save_dir, 'DEC_model_final.h5')
-        print(f"Loading model weights from {model_weights_file}")
+        self.output(f"Loading model weights from {model_weights_file}")
         self.model.load_weights(model_weights_file)
         
         # predict cluster labels
-        print("Predicting...")
+        self.output("Predicting...")
         q, _ = self.model.predict(self.x, verbose=1)
         p = self.target_distribution(q)  # update the auxiliary target distribution p
 
 
         # evaluate the clustering performance
-        loss = 0.0
-        print("Evaluating...")
-        y_pred = q.argmax(1)
+        self.output("Evaluating...")
+        self.y_pred = q.argmax(1)
         if self.y is not None:
-            acc = np.round(metrics.acc(self.y, y_pred), 5)
-            nmi = np.round(metrics.nmi(self.y, y_pred), 5)
-            ari = np.round(metrics.ari(self.y, y_pred), 5)
-            loss = np.round(loss, 5)
+            acc = np.round(metrics.acc(self.y, self.y_pred), 5)
+            nmi = np.round(metrics.nmi(self.y, self.y_pred), 5)
+            ari = np.round(metrics.ari(self.y, self.y_pred), 5)
+            cluster_acc = self.cluster_pred_acc()
             print(f'Acc = {acc:.5f}, nmi = {nmi:.5f}, ari = {ari:.5f}'
-                f' ; loss={loss}')
+                  f' ; Cluster Acc={cluster_acc:.5f}')
 
         # confusion matrix
-        cm_width = max(8, len(np.unique(y_pred)) * 2)
+            nmi = np.round(metrics.nmi(self.y, self.y_pred), 5)
+        cm_width = max(8, len(np.unique(self.y_pred)) * 2)
         cm_width = min(16, cm_width)
-        plot_confusion(self.y, y_pred, self.mapping, self.save_dir, cm_width)
+        plot_confusion(self.y, self.y_pred, self.mapping, self.save_dir, cm_width)
 
         # show wordclouds for each cluster
-        print ("CLUSTERS")
+        self.output ("CLUSTERS")
         clusters = {}
         predicted = DataFrame({
             'text':self.strings,
-            'y_pred':y_pred,
+            'y_pred':self.y_pred,
             'y_true':self.y})
         for cluster_no in tqdm(range(self.num_clusters)):
             y_pred_for_key = predicted[predicted['y_pred']==cluster_no]
@@ -959,9 +989,30 @@ class DeepCluster():
                 display_list.append(cluster)
 
         
-        print(write_results_page(display_list, self.save_dir, self.run_name))
+        self.output(write_results_page(display_list, self.save_dir, self.run_name))
 
-    def train_and_evaluate_model(self, eval_size):
+
+    def visualise_tsne(self):
+        tsne = TSNE(
+                n_components=2,
+                verbose=1,
+                random_state=123,
+                n_iter=300,
+                learning_rate='auto')
+        x_enc = self.encoder.predict(self.x)
+        z = tsne.fit_transform(x_enc)
+        df_tsne = pd.DataFrame()
+        df_tsne["y"] = self.y_pred
+        df_tsne["comp-1"] = z[:,0]
+        df_tsne["comp-2"] = z[:,1]
+        plt.figure(figsize=(18,14))
+        sns.scatterplot(x="comp-1", y="comp-2", hue=df_tsne.y.tolist(),
+                palette=sns.color_palette(
+                        "hls",
+                        len(ENTITY_FILTER_LIST)),
+                data=df_tsne).set(title="Labelled embeddings T-SNE projection") 
+
+    def train_and_evaluate_model(self, eval_size, verbose=1):
         """
         Make and evaluate a model.
         Arguments:
@@ -970,10 +1021,10 @@ class DeepCluster():
             n_clusters: number of clusters to use.
             entity_count: number of entities to use.
         """
+        self.verbose = verbose
         self.make_model()
         self.train_model()
         self.evaluate_model(eval_size)
-
 
 # %%
 stop
@@ -982,9 +1033,31 @@ stop
 # # Evaluate
 
 # %%
+# %history -g -f jupyter_history.py
 
+
+# %%
+del dc
+
+# %%
 dc = DeepCluster('test-0-40latent', dims=[768, 500, 500, 2000, 40],
-    entity_count=10, train_size=0, num_clusters=25).train_and_evaluate_model(10000)
+    entity_count=10, train_size=0, num_clusters=25, maxiter=2000)
+dc.train_and_evaluate_model(10000, verbose=1)
+
+# %%
+
+dc = DeepCluster('test-0-100latent', dims=[768, 500, 500, 2000, 100],
+    entity_count=10, train_size=0, num_clusters=25, maxiter=1000)
+dc.train_and_evaluate_model(10000, verbose=1)
+
+# %%
+dc = DeepCluster('test-0-250latent', dims=[768, 500, 500, 2000, 250],
+    entity_count=10, train_size=0, num_clusters=25, maxiter=1000)
+dc.train_and_evaluate_model(10000, verbose=1)
+
+# %%
+
+dc.visualise_tsne()
 
 # %%
 dc = DeepCluster('test1', train_size=0, num_clusters=25).train_and_evaluate_model(10000)
