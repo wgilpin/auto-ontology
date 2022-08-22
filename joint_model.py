@@ -392,7 +392,7 @@ from sklearn.cluster import KMeans
 from data import load_data
 from wordcloud import WordCloud
 import seaborn as sns
-
+import umap
 
 # %%
 def autoencoder_model(layer_specs: list, act: str='tanh', init_fn: str='glorot_uniform'):
@@ -882,17 +882,7 @@ class DeepCluster():
         frac = NER_match.shape[0]/NER_only.shape[0]
         return frac
 
-    def evaluate_model(self, eval_size: int) -> None:
-        """
-        Run the model.
-        """
-        if self.train_size != eval_size:
-            self.output("Load Data")
-            self.x, self.y, self.mapping, self.strings = load_data(
-                                                            eval_size,
-                                                            get_text=True)
-            self.output("Data Loaded")   
-
+    def make_load_model(self):
         self.make_model()
 
         ae_weights_file = os.path.join(self.save_dir, 'jae_weights.h5')
@@ -902,6 +892,22 @@ class DeepCluster():
         model_weights_file = os.path.join(self.save_dir, 'DEC_model_final.h5')
         self.output(f"Loading model weights from {model_weights_file}")
         self.model.load_weights(model_weights_file)
+
+    def evaluate_model(self, eval_size: int, verbose:int=1) -> None:
+        """
+        Run the model.
+        """
+        self.verbose = verbose
+
+        if self.train_size != eval_size:
+            self.output("Load Data")
+            self.x, self.y, self.mapping, self.strings = load_data(
+                                                            eval_size,
+                                                            get_text=True,
+                                                            verbose=verbose)
+            self.output("Data Loaded")   
+
+        self.make_load_model()
         
         # predict cluster labels
         self.output("Predicting...")
@@ -1012,6 +1018,26 @@ class DeepCluster():
                         len(ENTITY_FILTER_LIST)),
                 data=df_tsne).set(title="Labelled embeddings T-SNE projection") 
 
+    
+    def visualise_umap(self, sample:int=1000, embs:str="z"):
+        if embs == "z":
+            # encoder output
+            z_enc = self.encoder.predict(self.x)
+        elif embs == "x":
+            # raw BERT embeddings
+            z_enc = self.x
+        indices = np.random.choice(z_enc.shape[0], sample, replace=False)
+        labels = self.y_pred[indices]
+        labels = np.asarray(
+            [(self.mapping[l] if l in self.mapping else l) for l in labels ])
+        z_sample = z_enc[indices]
+        mapper = umap.UMAP(metric='manhattan').fit(z_sample)
+        import umap.plot as plt_u
+        plt_u.points(mapper, labels=labels)
+    
+    
+    
+
     def train_and_evaluate_model(self, eval_size, verbose=1):
         """
         Make and evaluate a model.
@@ -1043,6 +1069,14 @@ del dc
 dc = DeepCluster('test-0-40latent', dims=[768, 500, 500, 2000, 40],
     entity_count=10, train_size=0, num_clusters=25, maxiter=2000)
 dc.train_and_evaluate_model(10000, verbose=1)
+
+# %%
+dc = DeepCluster('test-0-40latent', dims=[768, 500, 500, 2000, 40],
+    entity_count=10, train_size=0, num_clusters=25, maxiter=2000)
+dc.evaluate_model(10000, verbose=0)
+print("UMAP")
+dc.visualise_umap(5000, embs="x")
+dc.visualise_umap(5000, embs="z")
 
 # %%
 
