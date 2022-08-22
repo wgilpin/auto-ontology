@@ -38,6 +38,14 @@ if (not setup_logging(logfile_file="project_log.log")):
 # %%
 
 
+def output(s:str, verbose:int=1):
+    """
+    Outputs a string to the console if verbose is set to 1 or higher
+    """
+    if verbose > 0:
+        print(s)
+    logging.info(s)
+
 def read_conll_dataset(filename: str) -> list:
     """
     Reads the CONLL dataset.
@@ -97,7 +105,7 @@ def join_punctuation(seq, characters=".,;?!'')-"):
 # CREATE TRAINING DATA
 
 
-def test_train_split(df, frac=1.0, oversample: bool=True):
+def test_train_split(df, frac=1.0, oversample: bool=True, verbose:int=1):
     """
     Returns a balanced train and test split of the dataframe
     -X train
@@ -126,12 +134,12 @@ def test_train_split(df, frac=1.0, oversample: bool=True):
     # see balance
     unique, counts = np.unique(train_y_df, return_counts=True)
     uniques = np.column_stack((unique, counts)) 
-    print("Train data balance:")
-    print(uniques)
+    output(verbose=verbose, s="Train data balance:")
+    output(verbose=verbose, s=uniques)
 
     if oversample:
         # oversample for balance
-        print("Balancing data")
+        output(verbose=verbose, s="Balancing data")
         ros = RandomOverSampler(random_state=0)
         train_x_df, train_y_df = ros.fit_resample(train_x_df, train_y_df)
     train_x_strings = train_x_df['chunk']
@@ -278,7 +286,8 @@ def load_data(
         size: int,
         entity_filter: list=None,
         get_text: bool=False,
-        oversample: bool=True) -> Tuple[pd.DataFrame, pd.DataFrame, dict, list]:
+        oversample: bool=True,
+        verbose:int=1) -> Tuple[pd.DataFrame, pd.DataFrame, dict, list]:
     """
     Load data from disk
     Arguments:
@@ -298,13 +307,13 @@ def load_data(
     filename_data = f"./data/conll_spacy_{size}.pkl"
     filename_mapping = f"./data/conll_spacy_{size}_map.pkl"
     if os.path.exists(filename_data) and os.path.exists(filename_mapping):
-        print(f"Loading {filename_data}")
+        output(f"Loading {filename_data}", verbose)
         trg = pd.read_pickle(filename_data)
         with open(filename_mapping, 'rb') as handle:
             mapping = pickle.load(handle)
-            print(f"LOADED {mapping}")
+            output(verbose=verbose, s=f"LOADED {mapping}")
     else:
-        print("Creating data")
+        output("Creating data", verbose)
         sample_conll = get_sample_conll_hf(size)
 
         embedder = TrainingDataSpacy(
@@ -313,7 +322,7 @@ def load_data(
         trg.to_pickle(filename_data)
         with open(filename_mapping, 'wb') as handle:
             pickle.dump(mapping, handle, protocol=pickle.HIGHEST_PROTOCOL)
-        print(f"SAVED {mapping}")
+        output(verbose=verbose, s=f"SAVED {mapping}")
 
     if entity_filter:
         # entity_filter to id list
@@ -322,16 +331,16 @@ def load_data(
         trg = trg[trg['label'].isin(allowed_y_list)]
 
 
-    print(f'Done: {trg.shape}')
+    output(f'Done: {trg.shape}', verbose)
 
-    x, _, y, _, strings = test_train_split(trg, oversample=oversample)
-    print(f"x: {x.shape}, y: {y.shape}")
+    x, _, y, _, strings = test_train_split(trg, oversample=oversample, verbose=verbose)
+    output(f"x: {x.shape}, y: {y.shape}", verbose)
 
     filtered_map = {}
     y_unq = np.unique(y)
     for idx, y_val in enumerate(y_unq):
         filtered_map[idx] = mapping[y_val]
     y = np.unique(y, return_inverse = True)[1]
-    print(filtered_map)
+    output(filtered_map, verbose)
 
     return x, y, filtered_map, strings if get_text else None
