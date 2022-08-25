@@ -153,7 +153,8 @@ def training_data_per_entity_fewNERD(
     emb_pipe = get_pipe('distilbert-base-uncased', TFDistilBertModel)
 
     logging.info(
-        f"Create Training Data for {length if length > 0 else 'all'} items, radius {radius}")
+        f"Create Training Data for {length if length > 0 else 'all'} "
+        f"items, radius {radius}")
     # get spacy data
     fewNERD_data = read_fewNERD(length)
 
