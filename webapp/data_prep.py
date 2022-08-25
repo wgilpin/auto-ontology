@@ -3,8 +3,8 @@
 import logging
 import numpy as np
 from imblearn.over_sampling import RandomOverSampler
-from spacyNER import TrainingDataSpacy
-from extract_bert_features import get_pipe, embed
+from src.spacyNER import TrainingDataSpacy
+from src.extract_bert_features import get_pipe, embed
 
 def test_train_split(df, frac=1.0, oversample: bool=True):
     """
