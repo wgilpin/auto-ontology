@@ -8,3 +8,6 @@ logs/
 
 # numpy state files
 *.npy
+
+# jupyter history dumps
+jupyter_history*
