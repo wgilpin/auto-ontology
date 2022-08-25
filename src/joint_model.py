@@ -26,7 +26,7 @@ import seaborn as sns
 import umap
 
 # %%
-def autoencoder_model(layer_specs: list, act: str='tanh', init_fn: str='glorot_uniform'):
+def autoencoder_model(layer_specs: list, act: str='tanh', init_fn: str='glorot_uniform', verbose=0):
     """
     Creates the autoencoder given
     -layer_specs: list of layer sizes.
@@ -50,12 +50,17 @@ def autoencoder_model(layer_specs: list, act: str='tanh', init_fn: str='glorot_u
             activation=act,
             kernel_initializer=init_fn,
             name=f'encoder_{i}')(x)
+        if verbose >= 2:
+            print(f'encoder_{i}: {layer_specs[i+1]} '
+                  f'activation={act}')
 
     # latent layer
     encoder = Dense(
         layer_specs[-1],
         kernel_initializer=init_fn,
         name=f'encoder_{layers - 1}')(x)
+    if verbose >= 2:
+        print(f'encoder_{layers - 1}: {layer_specs[-1]}')
 
     x = encoder
     # hidden layers in decoder
@@ -65,9 +70,15 @@ def autoencoder_model(layer_specs: list, act: str='tanh', init_fn: str='glorot_u
             activation=act,
             kernel_initializer=init_fn,
             name=f'decoder_{i}')(x)
+        if verbose >= 2:
+            print(f'encoder_{i}: {layer_specs[i]}'
+                  f' activation={act}')
 
     # output
     x = Dense(layer_specs[0], kernel_initializer=init_fn, name='decoder_0')(x)
+    if verbose >= 2:
+            print(f'output: {layer_specs[0]}'
+                  f'')
     decoder = x
     return (Model(inputs=input_img, outputs=decoder, name='AE'),
             Model(inputs=input_img, outputs=encoder, name='encoder'))
@@ -298,6 +309,7 @@ class DeepCluster():
                 dims: list[int] = None,
                 loss_weights: list[float] = None,
                 maxiter:int=8000,
+                verbose: int=1,
                 ):
 
         self.cluster = cluster
@@ -322,6 +334,7 @@ class DeepCluster():
         self.batch_size = 256
         
         self.dims = [768, 500, 500, 2000, 100] if dims is None else dims
+        self.loss_weights = [0.3, 1.0, 0.4] if loss_weights is None else loss_weights
         self.loss_weights = loss_weights
         self.run_name = run_name
         self.train_size = train_size
@@ -330,7 +343,7 @@ class DeepCluster():
         self.encoder = None
         self.autoencoder = None
         self.save_dir = None
-        self.verbose = 1
+        self.verbose = verbose
 
     def output(self, s:str)->None:
         if self.verbose > 0:
@@ -367,6 +380,9 @@ class DeepCluster():
         self.y_pred_last = np.copy(y_pred)
         self.output("cluster init done")
 
+    def test_loss(self, y, y_pred):
+        return cluster_loss(self.cluster, self.num_clusters)(y, y_pred)
+
     def make_model(self) -> None:
         
         init = VarianceScaling(
@@ -375,7 +391,10 @@ class DeepCluster():
                             distribution='uniform')
         pretrain_optimizer = 'adam'# SGD(learning_rate=1, momentum=0.9)
         
-        self.autoencoder, self.encoder = autoencoder_model(self.dims, init_fn=init)
+        self.autoencoder, self.encoder = autoencoder_model(
+                    self.dims,
+                    init_fn=init,
+                    verbose=self.verbose)
         self.autoencoder.compile(
             optimizer=pretrain_optimizer,
             loss=['mse'])
@@ -388,9 +407,8 @@ class DeepCluster():
         self.model = Model(inputs=self.encoder.input,
                     outputs=[clustering_layer, self.autoencoder.output])
         self.model.compile(
-            loss=['kld', 'mse', cluster_loss(self.cluster, self.num_clusters)],
-            loss_weights= [0.3, 1.0, 0.4] if 
-                self.loss_weights is None else self.loss_weights,
+            loss=['kld', 'mse', self.test_loss],
+            loss_weights=self.loss_weights,
             optimizer=SGD(learning_rate=0.5, momentum=0.9))
         self.output("model compiled")
         
@@ -506,7 +524,8 @@ class DeepCluster():
 
     def cluster_pred_acc(self):
         NER_only= DataFrame({'y':self.y, 'y_clus':self.y_pred})
-        unk_idx = [k for k, v in self.mapping.items() if v == 'UNKNOWN'][0]
+        unk_tuple = [k for k, v in self.mapping.items() if v == 'UNKNOWN']
+        unk_idx = unk_tuple[0] if len(unk_tuple) > 0 else None
         NER_only.drop(NER_only.index[NER_only['y']==unk_idx], inplace=True)
         NER_match = NER_only[NER_only['y']==NER_only['y_clus']]
         # fraction that match
@@ -684,7 +703,6 @@ class DeepCluster():
         self.evaluate_model(eval_size)
 
 # %%
-quit()
 stop
 
 # %% [markdown]
@@ -696,6 +714,20 @@ stop
 
 # %%
 del dc
+
+# %%
+dc = DeepCluster('test-0-40latent', dims=[768, 500, 500, 2000, 40],
+    entity_count=10, train_size=1000, num_clusters=25, maxiter=2000, loss_weights=[1.0, 0.1, 0.1],
+    verbose=2)
+
+
+# %%
+dc.make_model()
+print(dc.autoencoder.summary())
+
+
+# %%
+dc.train_and_evaluate_model(1000, verbose=1)
 
 # %%
 dc = DeepCluster('test-0-40latent', dims=[768, 500, 500, 2000, 40],
