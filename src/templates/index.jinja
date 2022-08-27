@@ -10,9 +10,18 @@
 
 <body>
   <h1 class="title">{{ test_name }} Results</h1>
-  <section class="section>
+  <section class="section">
     <div class="container">
         <image src="confusion_matrix.png" />
+    </div>
+  </section>
+  <section class="section">
+    <div class="container">
+        <h2 class="subtitle">Metrics</h2>
+        <p>F1 Score: {{ metrics.f1 }}</p>
+        <p>Accuracy: {{ metrics.acc }}</p>
+        <p>Precision: {{ metrics.precision }}</p>
+        <p>Recall: {{ metrics.recall }}</p>
     </div>
   </section>
   <section class="section">
@@ -28,17 +37,46 @@
                         Confidence {{ (c.frac * 100) | int }}%
                     </p>
                     <image src="wordcloud-{{ c.name }}.png" />
+                    <p>Classes</p>
+                    {% for e in c.classes %}
+                        <p>{{e.class}}: {{e.count}}</p>
+                    {% endfor %}
                 </div>
                 {% endfor %}
             </div>
             {% endfor %}
         </div>
     </section>
+    {% if new_clusters %}
+    <section class="section">
+        <div class="container">
+            <h2 class="subtitle">Clusters not recognised by NER</h2>
+            {% for row in new_clusters|batch(2) %}
+            <div class="columns">
+                {% for c in row %}
+                <div class="column">
+                    <p class="notification is-info">
+                        {{ c.name }} ({{ c.n }})
+                        <br/>
+                        Confidence {{ (c.frac * 100) | int }}%
+                    </p>
+                    <image src="wordcloud-{{ c.name }}-new.png" />
+                    <p>Classes</p>
+                    {% for e in c.classes %}
+                        <p>{{e.class}}: {{e.count}}</p>
+                    {% endfor %}
+                </div>
+                {% endfor %}
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
     <section class="section>
-    <div class="container">
-        <h2 class="subtitle">Model Structure</h2>
-        <image src="model.png" />
-    </div>
+      <div class="container">
+          <h2 class="subtitle">Model Structure</h2>
+          <image src="{{ test_name }}_model.png" />
+      </div>
   </section>
 </body>
 </html>
