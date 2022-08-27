@@ -134,13 +134,13 @@ def test_train_split(df, frac=1.0, oversample: bool=True, verbose:int=1):
     # see balance
     unique, counts = np.unique(train_y_df, return_counts=True)
     uniques = np.column_stack((unique, counts)) 
-    output(verbose=verbose, s="Train data balance:")
+    output(verbose=verbose, s="Data balance:")
     output(verbose=verbose, s=uniques)
 
     if oversample:
         # oversample for balance
         output(verbose=verbose, s="Balancing data")
-        ros = RandomOverSampler(random_state=0)
+        ros = RandomOverSampler(random_state=42)
         train_x_df, train_y_df = ros.fit_resample(train_x_df, train_y_df)
     train_x_strings = train_x_df['chunk']
     train_x_df = np.array(train_x_df.drop(
@@ -287,7 +287,8 @@ def load_data(
         entity_filter: list=None,
         get_text: bool=False,
         oversample: bool=True,
-        verbose:int=1) -> Tuple[pd.DataFrame, pd.DataFrame, dict, list]:
+        verbose:int=1,
+        train:bool=True) -> Tuple[pd.DataFrame, pd.DataFrame, dict, list]:
     """
     Load data from disk
     Arguments:
@@ -302,10 +303,10 @@ def load_data(
     """
     if entity_filter is None:
         entity_filter = []
+    ds_name = ''if train else '_test'
 
-
-    filename_data = f"./data/conll_spacy_{size}.pkl"
-    filename_mapping = f"./data/conll_spacy_{size}_map.pkl"
+    filename_data = f"./data/conll_spacy_{size}{ds_name}.pkl"
+    filename_mapping = f"./data/conll_spacy_{size}{ds_name}_map.pkl"
     if os.path.exists(filename_data) and os.path.exists(filename_mapping):
         output(f"Loading {filename_data}", verbose)
         trg = pd.read_pickle(filename_data)
@@ -314,7 +315,7 @@ def load_data(
             output(verbose=verbose, s=f"LOADED {mapping}")
     else:
         output("Creating data", verbose)
-        sample_conll = get_sample_conll_hf(size)
+        sample_conll = get_sample_conll_hf(size, train=train)
 
         embedder = TrainingDataSpacy(
             embed_sentence_level=True)
@@ -331,9 +332,11 @@ def load_data(
         trg = trg[trg['label'].isin(allowed_y_list)]
 
 
-    output(f'Done: {trg.shape}', verbose)
+    output(f'Loaded file: {trg.shape[0]} samples', verbose)
 
     x, _, y, _, strings = test_train_split(trg, oversample=oversample, verbose=verbose)
+    if oversample:
+        output("Post Oversampling", verbose)
     output(f"x: {x.shape}, y: {y.shape}", verbose)
 
     filtered_map = {}
