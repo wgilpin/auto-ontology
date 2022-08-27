@@ -4,7 +4,6 @@ from typing import Tuple
 import pandas as pd
 import spacy
 import numpy as np
-from spacy.tokens.span import Span
 from extract_bert_features import embed, get_pipe
 from transformers import TFDistilBertModel
 from tqdm import tqdm
@@ -263,6 +262,7 @@ class TrainingDataSpacy():
         # get embedding data
         res = []
         mapping={}
+        print("Embedding sentences")
         for sent in tqdm(sents):
             res.extend(self.embed_sentence(sent))
 
