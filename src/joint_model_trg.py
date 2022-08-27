@@ -121,11 +121,11 @@ def do_clustering(
             min_samples=dbscan_min_samples,
             metric='manhattan')
         y_pred = dbscan.fit_predict(z_state)
-        centers = None
+        centers = np.zeros((len(np.unique(y_pred))))
     elif clustering == 'OPTICS':
         optics = OPTICS(min_samples=dbscan_min_samples)
         y_pred = optics.fit_predict(z_state)
-        centers = None
+        centers = np.zeros((len(np.unique(y_pred))))
     elif clustering=="agg":
         agg = AgglomerativeClustering(n_clusters=n_clusters, affinity='manhattan', linkage='average')
         y_pred = agg.fit_predict(z_state)
@@ -625,16 +625,7 @@ class DeepLatentCluster():
         freqs = {w: f for w, f in freq_list}
         return freqs
 
-    def predict(self, sample_size: int):
-        """
-        Make predictions for the given sample size.
-        Sample will be from Test dataset not Train data
-        returns
-            - latent space predictions
-            - actual labels
-            - the textual repr of each item
-        """
-
+    def get_sample(self, sample_size: int):
         if self.config['train_size'] != sample_size or self.x is None:
             self.output("Load Data")
             self.x, self.y, self.mapping, self.strings = load_data(
@@ -655,6 +646,20 @@ class DeepLatentCluster():
             x_sample = self.x
             y_sample = self.y
             str_sample = self.strings
+        
+        return x_sample, y_sample, str_sample
+        
+    def predict(self, sample_size: int):
+        """
+        Make predictions for the given sample size.
+        Sample will be from Test dataset not Train data
+        returns
+            - latent space predictions
+            - actual labels
+            - the textual repr of each item
+        """
+
+        x_sample, y_sample, str_sample = self.get_sample(sample_size)
 
         # predict z space
         num_batches = math.ceil((1.0 * len(x_sample)) / self.batch_size)
@@ -677,10 +682,12 @@ class DeepLatentCluster():
 
     def apply_cluster_algo(self, z_sample, y_sample):
         print(f"Clustering {z_sample.shape[0]} points")
-        y_pred_sample, _ = do_clustering(
+        y_pred_sample, c = do_clustering(
             clustering=self.config['cluster'],
             n_clusters=self.config['num_clusters'],
             z_state=z_sample)
+        if self.config['cluster'] in ['DBSCAN', 'OPTICS']:
+            self.config['num_clusters'] = len(c)
 
         print("Visualising")
         y_label = np.asarray(
@@ -695,41 +702,50 @@ class DeepLatentCluster():
 
         # show wordclouds for each cluster
         self.output("CLUSTERS")
-        clusters = {}
+        cluster_counts = {}
 
-        all_clusters = DataFrame({
+        sample = DataFrame({
             'text': str_sample,
             'y_true': y_sample,
             'y_pred': y_pred_sample,
             'y_label': y_label, })
 
         # placeholder for revised predictions
-        all_clusters['y_pred_new'] = 0
+        sample['y_pred_new'] = 0
+
+        # make a n x m array
+        y_true_per_cluster = np.zeros(( self.config['num_clusters'], len(self.mapping)))
 
 
-        # make a square matrix
+        # count number of times each entity is truly present
+        ent_counts = self.get_freqs(sample['y_true'])
+
+        for ent_no, ent_str in self.mapping.items():
+            if ent_str == 'UNKNOWN':
+                # skip unknown
+                continue
+            # get the predicted clusters for this entity
+
+            for c in range(self.config['num_clusters']):
+                y_true_per_cluster[c, ent_no] = sample[
+                    (sample['y_true'] == ent_no) & 
+                    (sample['y_pred']==c)].shape[0]
+
+        clusters={}
         num_clusters_pred = np.unique(y_pred_sample).shape[0]
-        for cluster_label in np.unique(y_pred_sample):
-            cluster = all_clusters[all_clusters['y_pred'] == cluster_label]
-
-            class_freqs, frac = freqs_descending(cluster, 'y_true')
-
-            true_label = 'UNKNOWN'
-            modal_value = class_freqs[0][0]
-            if modal_value > 0:
-                if modal_value in self.mapping:
-                    true_label = self.mapping[modal_value]
-                # confidence - fraction of this cluster that is actually this cluster
-                y_true_this_cluster = len(
-                    cluster[cluster['y_true'] == modal_value])
-                frac = y_true_this_cluster/cluster.shape[0]
-            else:
-                frac = 0
+        for cluster_no in np.unique(y_pred_sample):
+            cluster = sample[sample['y_pred'] == cluster_no]
+            likeliest_ent = np.argmax(y_true_per_cluster[cluster_no])
+            likeliest_label = self.mapping[likeliest_ent]
+            y_true_this_cluster = len(
+                    cluster[cluster['y_true'] == likeliest_ent])
+            frac = y_true_this_cluster/cluster.shape[0]
 
             # wordcloud
             freqs = self.get_freqs(cluster['text'].values)
             unknown_cluster = cluster[cluster['y_true'] == 0]
             freqs_unknown = self.get_freqs(unknown_cluster['text'].values)
+            class_freqs, frac = freqs_descending(cluster, 'y_true')
             entry = {
                 'freqs': freqs,
                 'freqs_unknown': freqs_unknown,
@@ -737,25 +753,27 @@ class DeepLatentCluster():
                 'frac': frac,
                 'n': len(cluster)
                 }
-            if true_label == 'UNKNOWN':
-                clusters[f"UNK-{cluster_label}"] = entry
-            elif true_label in clusters:
-                if clusters[true_label]['class_freqs'][0][1] < class_freqs[0][1]:
-                # if clusters[true_label]['frac'] < frac:
+            if likeliest_label == 'UNKNOWN':
+                clusters[f"UNK-{likeliest_label}"] = entry
+            elif likeliest_label in clusters:
+                num_in_clus = clusters[likeliest_label]['frac'] *\
+                              clusters[likeliest_label]['n']
+                if num_in_clus < y_true_this_cluster:
                     # we found a better cluster for this label
-                    clusters[true_label] = entry
+                    clusters[likeliest_label] = entry
                 else:
                     # this cluster is worse than this one, so it's unknown
-                    clusters[f"UNK-{cluster_label} Was {true_label}"] = entry
+                    clusters[f"UNK-Was {likeliest_label}"] = entry
             else:
-                clusters[true_label] = entry
+                clusters[likeliest_label] = entry
 
             # write the cluster label back into the sample
-            all_clusters.loc[
-                all_clusters['y_label'] == true_label, 
-                'y_pred_new'] = modal_value
+            sample.loc[
+                (sample['y_pred'] == cluster_no) &
+                (sample['y_label'] == likeliest_label), 
+                'y_pred_new'] = likeliest_ent
 
-        return all_clusters, clusters
+        return sample, clusters
 
     def show_core_metrics(self, y_sample, y_pred_sample, all_clusters):
         # confusion matrix
@@ -807,8 +825,6 @@ class DeepLatentCluster():
                     save_file,
                     cluster['n'],
                     save_only=True)
-                print(f"NER Cluster {i} {cluster['name']}")
-                print(f"{cluster['n']} items")
 
                 # the top 3 entity classes in this cluster
                 top_entities = []
@@ -873,6 +889,32 @@ class DeepLatentCluster():
         self.save_scores(cluster_list, scores_agg)
 
         
+    def benchmark_model(self, sample_size: int = 0, verbose: int = 1) -> None:
+        """
+        Run the model.
+        """
+        self.verbose = verbose
+
+        # predict the requested sample size
+        # z is the latent space
+        z_sample, y_sample, str_sample = self.predict(sample_size)
+
+        # cluster the latent space using requested algorithm
+        y_pred_sample, y_label = self.apply_cluster_algo(z_sample, y_sample)
+
+        # assign labels to the clusters
+        all_clusters, clusters = self.eval_cluster(y_pred_sample, y_sample, y_label, str_sample)
+
+        # overall scores
+        scores_agg = self.show_core_metrics(y_sample, y_pred_sample, all_clusters)
+
+        # cluster scores
+        cluster_list = self.score_clusters(clusters)
+
+        # output file
+        self.save_scores(cluster_list, scores_agg)
+
+        
 
     
 
@@ -894,6 +936,9 @@ def train_and_evaluate_model(self, eval_size, verbose=1):
 # %%
 stop
 
+# %% [markdown]
+# # Eval
+
 # %%
 tf.get_logger().setLevel('ERROR')
 
@@ -907,6 +952,9 @@ dc = DeepLatentCluster(
 # dc.make_model()
 # dc.train_model()
 dc.evaluate_model(sample_size=5000)
+
+# %% [markdown]
+# ## OPTICS
 
 # %%
 tf.get_logger().setLevel('ERROR')
@@ -924,6 +972,9 @@ dc = DeepLatentCluster(
 # dc.train_model()
 dc.evaluate_model(sample_size=1000)
 
+# %% [markdown]
+# ## Agglomerative Clustering
+
 # %%
 tf.get_logger().setLevel('ERROR')
 
@@ -940,6 +991,9 @@ dc.make_model()
 dc.train_model()
 dc.evaluate_model(sample_size=1000)
 
+# %% [markdown]
+# ## K-means
+
 # %%
 tf.get_logger().setLevel('ERROR')
 
@@ -952,25 +1006,28 @@ dc = DeepLatentCluster(
         'latent_weight':1e-5,
         "cluster": "Kmeans"
     })
-dc.make_model()
-dc.train_model()
-dc.evaluate_model(sample_size=3000)
+# dc.make_model()
+# dc.train_model()
+dc.evaluate_model(sample_size=4000)
+
+# %% [markdown]
+# ## GMM
 
 # %%
 tf.get_logger().setLevel('ERROR')
 
 dc = None
 dc = DeepLatentCluster(
-    'test-latent-10k-kmeans',
+    'test-latent-10k-GMM',
     {
-        'train_size':1000,
+        'train_size':10000,
         'reconstr_weight':1.0,
         'latent_weight':1e-5,
         "cluster": "Kmeans"
     })
 # dc.make_model()
 # dc.train_model()
-dc.evaluate_model(sample_size=3000)
+dc.evaluate_model(sample_size=2000)
 
 # %%
 tf.get_logger().setLevel('ERROR')
