@@ -24,30 +24,7 @@
         <p>Recall: {{ metrics.recall }}</p>
     </div>
   </section>
-  <section class="section">
-        <div class="container">
-            <h2 class="subtitle">Clusters</h2>
-            {% for row in clusters|batch(2) %}
-            <div class="columns">
-                {% for c in row %}
-                <div class="column">
-                    <p class="notification is-info">
-                        {{ c.name }} ({{ c.n }})
-                        <br/>
-                        Confidence {{ (c.frac * 100) | int }}%
-                    </p>
-                    <image src="wordcloud-{{ c.name }}.png" />
-                    <p>Classes</p>
-                    {% for e in c.classes %}
-                        <p>{{e.class}}: {{e.count}}</p>
-                    {% endfor %}
-                </div>
-                {% endfor %}
-            </div>
-            {% endfor %}
-        </div>
-    </section>
-    {% if new_clusters %}
+  {% if new_clusters %}
     <section class="section">
         <div class="container">
             <h2 class="subtitle">Clusters not recognised by NER</h2>
@@ -72,6 +49,31 @@
         </div>
     </section>
     {% endif %}
+    <section class="section">
+        <div class="container">
+            <h2 class="subtitle">Clusters</h2>
+            {% for row in clusters|batch(2) %}
+            <div class="columns">
+                {% for c in row %}
+                <div class="column">
+                    <p class="notification is-info">
+                        {{ c.name }} ({{ c.n }})
+                        <br/>
+                        Confidence {{ (c.frac * 100) | int }}%
+                    </p>
+                    <image src="wordcloud-{{ c.name }}.png" />
+                    <p>Classes</p>
+                    {% for e in c.classes %}
+                        <p>{{e.class}}: {{e.count}}</p>
+                    {% endfor %}
+                    <p>F-1 = {{ c.f1 }}</p>
+                </div>
+                {% endfor %}
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    
     <section class="section>
       <div class="container">
           <h2 class="subtitle">Model Structure</h2>
