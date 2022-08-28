@@ -8,19 +8,19 @@
 
 import os
 import math
+import warnings
+
 import numpy as np
-from typing import Any
 import tensorflow as tf
 import tensorflow.keras as k
 import matplotlib.pyplot as plt
-import metrics
 from pandas import DataFrame
 from metrics import plot_confusion
 from IPython.display import Image
 from tensorflow.keras import models
 from keras.utils import plot_model
 from tqdm.notebook import trange
-from tensorflow.keras.layers import Dense, Input, Layer, InputSpec, Dropout
+from tensorflow.keras.layers import Dense, Input
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import SGD
 from tensorflow.keras.initializers import VarianceScaling
@@ -30,7 +30,6 @@ from sklearn.metrics import (
                 f1_score, accuracy_score, precision_score, recall_score)
 from data import load_data
 from wordcloud import WordCloud
-import seaborn as sns
 import umap
 
 # %%
@@ -171,8 +170,6 @@ def write_results_page(clusters, new_clusters, save_dir, test_name, scores):
         print (f'... wrote results  <a href="{full_filename}">{full_filename}</a>')
 
 # %%
-from ast import NamedExpr
-
 
 def show_wordcloud(
     i: int,
@@ -198,10 +195,6 @@ def show_wordcloud(
         print(f"No words for cluster {name}")
 
 # %%
-from pickletools import optimize
-from tabnanny import verbose
-from unicodedata import name
-import warnings
 warnings.filterwarnings("ignore")
 
 ENTITY_FILTER_LIST = ['GPE', 'PERSON', 'ORG', 'DATE', 'NORP',
