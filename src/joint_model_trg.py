@@ -8,28 +8,29 @@
 
 import os
 import math
-import warnings
-
 import numpy as np
+from typing import Any
 import tensorflow as tf
 import tensorflow.keras as k
 import matplotlib.pyplot as plt
-from pandas import DataFrame
+import metrics
+from pandas import DataFrame, crosstab
 from metrics import plot_confusion
 from IPython.display import Image
 from tensorflow.keras import models
 from keras.utils import plot_model
 from tqdm.notebook import trange
-from tensorflow.keras.layers import Dense, Input
+from tensorflow.keras.layers import Dense, Input, Layer, InputSpec, Dropout
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import SGD
 from tensorflow.keras.initializers import VarianceScaling
 from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.cluster import KMeans
 from sklearn.metrics import (
-                f1_score, accuracy_score, precision_score, recall_score)
+            f1_score, accuracy_score, precision_score, recall_score, classification_report)
 from data import load_data
 from wordcloud import WordCloud
+import seaborn as sns
 import umap
 
 # %%
@@ -71,6 +72,7 @@ def cluster_acc(y_true, y_pred, y_pred_cluster):
     return c_loss
 
 # %%
+from tabnanny import verbose
 from sklearn.cluster import KMeans, DBSCAN, OPTICS, AgglomerativeClustering
 from sklearn import mixture
 from scipy.stats import multivariate_normal
@@ -122,11 +124,17 @@ def do_clustering(
         y_pred = dbscan.fit_predict(z_state)
         centers = np.zeros((len(np.unique(y_pred))))
     elif clustering == 'OPTICS':
-        optics = OPTICS(min_samples=dbscan_min_samples)
+        optics = OPTICS(
+            min_samples=dbscan_min_samples, 
+            min_cluster_size=5,
+            metric='manhattan')
         y_pred = optics.fit_predict(z_state)
         centers = np.zeros((len(np.unique(y_pred))))
     elif clustering=="agg":
-        agg = AgglomerativeClustering(n_clusters=n_clusters, affinity='manhattan', linkage='average')
+        agg = AgglomerativeClustering(
+            n_clusters=n_clusters,
+            affinity='manhattan',
+            linkage='average')
         y_pred = agg.fit_predict(z_state)
         centers = None
     else:
@@ -170,6 +178,8 @@ def write_results_page(clusters, new_clusters, save_dir, test_name, scores):
         print (f'... wrote results  <a href="{full_filename}">{full_filename}</a>')
 
 # %%
+from ast import NamedExpr
+
 
 def show_wordcloud(
     i: int,
@@ -195,6 +205,7 @@ def show_wordcloud(
         print(f"No words for cluster {name}")
 
 # %%
+import warnings
 warnings.filterwarnings("ignore")
 
 ENTITY_FILTER_LIST = ['GPE', 'PERSON', 'ORG', 'DATE', 'NORP',
@@ -265,7 +276,8 @@ class DeepLatentCluster():
             "ae_init_fn": VarianceScaling(
                 mode='fan_in',
                 scale=1. / 3.,
-                distribution='uniform')
+                distribution='uniform'),
+            "base_dir": "results",
         }
         if config is not None:
             self.config = {**self.config, **config}
@@ -278,6 +290,12 @@ class DeepLatentCluster():
             else:
                 self.config['entities'] = ENTITY_FILTER_LIST[
                     :self.config['entity_count']]
+
+
+        self.save_dir = f'./{self.config["base_dir"]}/{self.run_name}'
+        if not os.path.exists(self.save_dir):
+            # create save dir
+            os.makedirs(self.save_dir)
 
     def output(self, s: str) -> None:
         if self.verbose > 0:
@@ -296,7 +314,6 @@ class DeepLatentCluster():
         self.input_dim = self.x.shape[1]
         self.output("Data Loaded")
 
-    # create a Dense layer from a config
     @staticmethod
     def create_layer(config: dict, name: str, init_fn: str = 'glorot_uniform') -> Dense:
         """
@@ -305,16 +322,12 @@ class DeepLatentCluster():
             - n: number of units
             - act: activation function
         """
-        print(f"Layer {name}: {config['n']} "
-              f"activation={config['act']}")
         return Dense(
             name=name,
             units=config["n"],
             activation=config["act"],
             kernel_initializer=init_fn,
             kernel_regularizer='l1')
-
-    # build the autoencoder
 
     def autoencoder_model(self, layer_specs: list, act: str = 'tanh', init_fn: str = 'glorot_uniform', verbose=0):
         """
@@ -377,8 +390,6 @@ class DeepLatentCluster():
             print(f'output: {layer_specs[0]}'
                   f'')
         return (encoder, autoencoder)
-
-    # create the latent_space model
 
     def create_latent_space_model(self, input_layer: Dense) -> Model:
         """
@@ -449,10 +460,6 @@ class DeepLatentCluster():
 
         self.autoencoder.compile(optimizer='adam', loss='mse')
 
-        self.save_dir = f'./results/{self.run_name}'
-        if not os.path.exists(self.save_dir):
-            # create save dir
-            os.makedirs(self.save_dir)
         img_file = os.path.join(self.save_dir, f'{self.run_name}_model.png')
         plot_model(self.model, to_file=img_file, show_shapes=True)
         Image(filename=img_file)
@@ -546,7 +553,7 @@ class DeepLatentCluster():
 
         update_interval = 140
         index_array = np.arange(self.x.shape[0])
-        tol = 0.00001  # tolerance threshold to stop training
+        tol = 1e-6  # tolerance threshold to stop training
         loss = 0
         index = 0
         update_interval = 140
@@ -581,17 +588,21 @@ class DeepLatentCluster():
         frac = NER_match.shape[0]/NER_only.shape[0]
         return frac
 
-    def make_load_model(self):
+    def make_load_model(self, load_dir):
         self.make_model()
 
-        ae_weights_file = os.path.join(self.save_dir, 'ae_weights.h5')
+        if load_dir is None:
+            load_dir = self.save_dir
+        else:
+            load_dir = f'./{self.config["base_dir"]}/{load_dir}'
+
+        ae_weights_file  = os.path.join(load_dir, 'ae_weights.h5')
         self.output(f"Loading AE weights from {ae_weights_file}")
         self.autoencoder.load_weights(ae_weights_file)
 
-        model_weights_file = os.path.join(self.save_dir, 'lat_model_final.h5')
+        model_weights_file = os.path.join(load_dir, 'lat_model_final.h5')
         self.output(f"Loading model weights from {model_weights_file}")
         self.model.load_weights(model_weights_file)
-
 
     def visualise_umap(self, sample: int = 1000, embs: str = "z"):
         if embs == "z":
@@ -620,13 +631,13 @@ class DeepLatentCluster():
 
     def get_sample(self, sample_size: int):
         if self.config['train_size'] != sample_size or self.x is None:
-            self.output("Load Data")
+            self.output("Load Data ")
             self.x, self.y, self.mapping, self.strings = load_data(
                 0,
                 get_text=True,
                 verbose=verbose,
                 train=False)
-            self.output("Test Data Loaded")
+            self.output(f"Test Data Loaded {self.x.shape}")
 
         # sample
         if sample_size > 0 and self.x.shape[0] > sample_size:
@@ -642,7 +653,7 @@ class DeepLatentCluster():
         
         return x_sample, y_sample, str_sample
         
-    def predict(self, sample_size: int):
+    def predict(self, sample_size: int, head: str=None):
         """
         Make predictions for the given sample size.
         Sample will be from Test dataset not Train data
@@ -651,12 +662,16 @@ class DeepLatentCluster():
             - actual labels
             - the textual repr of each item
         """
-
+        if head is None:
+            head = 'z'
+        print(f"Using [{head}] head for predictions")
+        
         x_sample, y_sample, str_sample = self.get_sample(sample_size)
 
         # predict z space
         num_batches = math.ceil((1.0 * len(x_sample)) / self.batch_size)
-        self.output(f"Predicting...{num_batches} batches of {self.batch_size}")
+        self.output(f"Predicting...{num_batches} batches of "
+                    f"{self.batch_size} x {x_sample.shape[1]}")
 
         # run the model on sampled x in batches
         z_sample = []
@@ -665,7 +680,13 @@ class DeepLatentCluster():
                 i * self.batch_size,
                 min(len(x_sample), (i + 1) * self.batch_size))
             x = x_sample[idx]
-            _, z_batch = self.model.predict(x, verbose=0)
+            if head == 'z':
+                _, z_batch = self.model.predict(x, verbose=0)
+            elif head == 'ae':
+                z_batch = self.autoencoder.predict(x, verbose=0)
+            elif head == 'enc':
+                z_batch = self.encoder.predict(x, verbose=0)
+                
             z_sample += [z_batch]
 
         z_space = np.vstack(np.array(z_sample))
@@ -674,7 +695,8 @@ class DeepLatentCluster():
         return z_space, y_sample, str_sample
 
     def apply_cluster_algo(self, z_sample, y_sample):
-        print(f"Clustering {z_sample.shape[0]} points")
+        print(f"Clustering {z_sample.shape[0]} points "
+              f"using {self.config['cluster']}")
         y_pred_sample, c = do_clustering(
             clustering=self.config['cluster'],
             n_clusters=self.config['num_clusters'],
@@ -690,6 +712,23 @@ class DeepLatentCluster():
         plt_u.points(mapper, labels=y_label)
 
         return y_pred_sample, y_label
+
+    def calc_metrics(self, TP, FP, FN):
+            
+        if TP + FP == 0:
+            precision = 0
+        else:
+            precision = TP / (TP + FP)
+        if TP + FN == 0:
+            recall = 0
+        else:
+            recall = TP / (TP + FN)
+        if precision + recall == 0:
+            f1 = 0
+        else:
+            f1 = 2 * precision * recall / (precision + recall)
+        
+        return f1, precision, recall
 
     def eval_cluster(self, y_pred_sample, y_sample, y_label, str_sample):
 
@@ -707,64 +746,110 @@ class DeepLatentCluster():
         sample['y_pred_new'] = 0
 
         # make a n x m array
-        y_true_per_cluster = np.zeros(( self.config['num_clusters'], len(self.mapping)))
+        y_tru_per_clus = crosstab(index=sample['y_true'], columns=sample['y_pred'])
+        y_tru_counts = y_tru_per_clus.sum()
+        y_tru_frac_by_clus = y_tru_per_clus / y_tru_counts
 
 
         # count number of times each entity is truly present
         ent_counts = self.get_freqs(sample['y_true'])
 
-        for ent_no, ent_str in self.mapping.items():
-            if ent_str == 'UNKNOWN':
-                # skip unknown
-                continue
-            # get the predicted clusters for this entity
-
-            for c in range(self.config['num_clusters']):
-                y_true_per_cluster[c, ent_no] = sample[
-                    (sample['y_true'] == ent_no) & 
-                    (sample['y_pred']==c)].shape[0]
-
         clusters={}
         num_clusters_pred = np.unique(y_pred_sample).shape[0]
-        for cluster_no in np.unique(y_pred_sample):
-            cluster = sample[sample['y_pred'] == cluster_no]
-            likeliest_ent = np.argmax(y_true_per_cluster[cluster_no])
-            likeliest_label = self.mapping[likeliest_ent]
+        for clus_no in np.unique(y_pred_sample):
+            if clus_no < 0:
+                continue
+            cluster = sample[sample['y_pred'] == clus_no]
+            prob_ent = np.argmax(y_tru_per_clus[clus_no])
+            prob_lbl = self.mapping[prob_ent]
             y_true_this_cluster = len(
-                    cluster[cluster['y_true'] == likeliest_ent])
-            frac = y_true_this_cluster/cluster.shape[0]
+                    cluster[cluster['y_true'] == prob_ent])
+            frac = y_tru_frac_by_clus[clus_no][prob_ent]
 
             # wordcloud
             freqs = self.get_freqs(cluster['text'].values)
             unknown_cluster = cluster[cluster['y_true'] == 0]
             freqs_unknown = self.get_freqs(unknown_cluster['text'].values)
-            class_freqs, frac = freqs_descending(cluster, 'y_true')
+            class_freqs, _ = freqs_descending(cluster, 'y_true')
             entry = {
                 'freqs': freqs,
                 'freqs_unknown': freqs_unknown,
                 'class_freqs': class_freqs,
                 'frac': frac,
-                'n': len(cluster)
+                'n': len(cluster),
+                'label': prob_lbl,
+                'entity_id': prob_ent,
+                'clus_no': clus_no,
                 }
-            if likeliest_label == 'UNKNOWN':
-                clusters[f"UNK-{likeliest_label}"] = entry
-            elif likeliest_label in clusters:
-                num_in_clus = clusters[likeliest_label]['frac'] *\
-                              clusters[likeliest_label]['n']
-                if num_in_clus < y_true_this_cluster:
+
+            # filling in the dict {name: entry}
+            # where the best PERSON entry is eponymous and less likely entries
+            # are named "UNK-PERSON-X" for cluster X
+            cluster_name = prob_lbl
+            unk_cluster_name = f"UNK-{prob_lbl}-{clus_no}"
+
+            if prob_lbl == 'UNKNOWN':
+                cluster_name = unk_cluster_name
+            elif prob_lbl in clusters:
+                if y_tru_frac_by_clus[clus_no][prob_ent] > clusters[prob_lbl]['frac']:
                     # we found a better cluster for this label
-                    clusters[likeliest_label] = entry
+                    clusters[unk_cluster_name] = clusters[prob_lbl]
                 else:
                     # this cluster is worse than this one, so it's unknown
-                    clusters[f"UNK-Was {likeliest_label}"] = entry
-            else:
-                clusters[likeliest_label] = entry
+                    cluster_name = unk_cluster_name
+            clusters[cluster_name] = entry
+
+            
 
             # write the cluster label back into the sample
             sample.loc[
-                (sample['y_pred'] == cluster_no) &
-                (sample['y_label'] == likeliest_label), 
-                'y_pred_new'] = likeliest_ent
+                (sample['y_pred'] == clus_no) &
+                (sample['y_true'] == prob_ent), 
+                'y_pred_new'] = prob_ent
+
+        # confusion        
+        f1_list = []
+        size_list = []
+        for cluster_name, ce in clusters.items():
+            c_no = ce['clus_no']
+            c = sample[sample.y_pred == c_no]
+            c_ent = ce['entity_id']
+
+            # the right entity class in the right cluster
+            TP = c[(c.y_pred_new == c_ent) & (c.y_true == c_ent)].shape[0]
+
+            # this cluster, we think it's right entity but not the right entity 
+            FP = c[(c.y_pred_new == c_ent) & (c.y_true != c_ent)].shape[0]
+
+            # it's the right entity in wrong cluster
+            FN = sample[
+                (sample.y_pred_new == c_ent) &\
+                (sample.y_true == c_ent) &\
+                (sample.y_pred != c_no)].shape[0]
+            
+            f1, prec, rec = self.calc_metrics(TP, FP, FN)
+
+            clusters[cluster_name]['F1'] = f1
+            clusters[cluster_name]['precision'] = prec
+            clusters[cluster_name]['recall'] = rec
+            clusters[cluster_name]['TP'] = TP
+            clusters[cluster_name]['FP'] = FP
+            clusters[cluster_name]['FN'] = FN
+
+            if cluster_name[0:3] == 'UNK':
+                f1_list.append(f1)
+                size_list.append(ce['n']/sample.shape[0])
+
+            print(f"#{cluster_name}:{c_no} size:{len(c)} "
+                    f"prec:{prec:.4f} rec:{rec:.4f} f1:{f1:.4f}")
+
+        # full cluster
+        print(f"\nF1 by Known Clusters: {np.dot(f1_list, size_list):.4f}")
+
+        # print(classification_report(
+        #     sample['y_true'],
+        #     sample['y_pred_new'],
+        #     labels=[l for k,l in self.mapping.items()] ))
 
         return sample, clusters
 
@@ -778,13 +863,13 @@ class DeepLatentCluster():
         # metrics
         y = all_clusters['y_true']
         y_pred = all_clusters['y_pred_new']
-        f1 = f1_score(y, y_pred, average='weighted')
+        f1 = f1_score(y, y_pred, average='macro')
         acc = accuracy_score(y, y_pred)
         precision = precision_score(
-            y, y_pred, average='weighted')
-        recall = recall_score(y, y_pred, average='weighted')
+            y, y_pred, average='macro')
+        recall = recall_score(y, y_pred, average='macro')
         print("\n")
-        print(f"F1 score (weighted) = {f1:.4f}")
+        print(f"F1 score (macro) = {f1:.4f}")
         print(f"Accuracy = {acc:.4f}")
         print(f"Precision = {precision:.4f}")
         print(f"Recall = {recall:.4f}")
@@ -854,17 +939,7 @@ class DeepLatentCluster():
             scores,
         )
 
-    def evaluate_model(self, sample_size: int = 0, verbose: int = 1) -> None:
-        """
-        Run the model.
-        """
-        self.verbose = verbose
-
-        self.make_load_model()
-
-        # predict the requested sample size
-        # z is the latent space
-        z_sample, y_sample, str_sample = self.predict(sample_size)
+    def do_evaluation(self, z_sample, y_sample, str_sample):
 
         # cluster the latent space using requested algorithm
         y_pred_sample, y_label = self.apply_cluster_algo(z_sample, y_sample)
@@ -881,7 +956,37 @@ class DeepLatentCluster():
         # output file
         self.save_scores(cluster_list, scores_agg)
 
-        
+    def evaluate_model(self, load_dir: str, sample_size: int = 0, head: str=None, verbose: int = 1) -> None:
+        """
+        Run the model.
+        """
+        self.verbose = verbose
+
+        self.make_load_model(load_dir)
+
+        # predict the requested sample size
+        # z is the latent space
+        z_sample, y_sample, str_sample = self.predict(sample_size, head)
+
+        self.do_evaluation(z_sample, y_sample, str_sample)
+  
+    def do_evaluation(self, z_sample, y_sample, str_sample):
+
+        # cluster the latent space using requested algorithm
+        y_pred_sample, y_label = self.apply_cluster_algo(z_sample, y_sample)
+
+        # assign labels to the clusters
+        all_clusters, clusters = self.eval_cluster(y_pred_sample, y_sample, y_label, str_sample)
+
+        # overall scores
+        scores_agg = self.show_core_metrics(y_sample, y_pred_sample, all_clusters)
+
+        # cluster scores
+        cluster_list = self.score_clusters(clusters)
+
+        # output file
+        self.save_scores(cluster_list, scores_agg)
+
     def benchmark_model(self, sample_size: int = 0, verbose: int = 1) -> None:
         """
         Run the model.
@@ -889,27 +994,10 @@ class DeepLatentCluster():
         self.verbose = verbose
 
         # predict the requested sample size
-        # z is the latent space
-        z_sample, y_sample, str_sample = self.predict(sample_size)
+        x_sample, y_sample, str_sample = self.get_sample(sample_size)
 
-        # cluster the latent space using requested algorithm
-        y_pred_sample, y_label = self.apply_cluster_algo(z_sample, y_sample)
+        self.do_evaluation(x_sample, y_sample, str_sample)
 
-        # assign labels to the clusters
-        all_clusters, clusters = self.eval_cluster(y_pred_sample, y_sample, y_label, str_sample)
-
-        # overall scores
-        scores_agg = self.show_core_metrics(y_sample, y_pred_sample, all_clusters)
-
-        # cluster scores
-        cluster_list = self.score_clusters(clusters)
-
-        # output file
-        self.save_scores(cluster_list, scores_agg)
-
-        
-
-    
 
 # %%
 def train_and_evaluate_model(self, eval_size, verbose=1):
@@ -927,132 +1015,298 @@ def train_and_evaluate_model(self, eval_size, verbose=1):
     self.evaluate_model(eval_size)
 
 # %%
+tf.get_logger().setLevel('ERROR')
+
+# %%
 stop
 
 # %% [markdown]
 # # Eval
 
+# %% [markdown]
+# ## Base model
+
 # %%
 tf.get_logger().setLevel('ERROR')
 
+dc = None
 dc = DeepLatentCluster(
-    'test-latent-10k',
+    'test-latent-all',
     {
-        'train_size':10000,
+        'train_size':0,
         'reconstr_weight':1.0,
-        'latent_weight':1e-5
+        'latent_weight':1e-5,
+        "cluster": None
     })
-# dc.make_model()
-# dc.train_model()
-dc.evaluate_model(sample_size=5000)
+dc.make_model()
+dc.train_model()
+
+# %% [markdown]
+# # Latent Head
 
 # %% [markdown]
 # ## OPTICS
 
 # %%
-tf.get_logger().setLevel('ERROR')
+#%%time
 
 dc = None
 dc = DeepLatentCluster(
-    'test-latent-10k-OPTICS',
+    'test-latent-all-OPTICS',
     {
-        'train_size':10000,
+        'train_size':0,
         'reconstr_weight':1.0,
         'latent_weight':1e-5,
         "cluster": "OPTICS"
     })
-# dc.make_model()
-# dc.train_model()
-dc.evaluate_model(sample_size=1000)
+
+dc.evaluate_model('test-latent-all', sample_size=2000)
 
 # %% [markdown]
 # ## Agglomerative Clustering
 
 # %%
+%%time
+
 tf.get_logger().setLevel('ERROR')
 
 dc = None
 dc = DeepLatentCluster(
-    'test-latent-10k-agg',
+    'test-latent-all-agg',
     {
         'train_size':10000,
         'reconstr_weight':1.0,
         'latent_weight':1e-5,
         "cluster": "agg"
     })
-dc.make_model()
-dc.train_model()
-dc.evaluate_model(sample_size=1000)
+# dc.make_model()
+# dc.train_model()
+dc.evaluate_model('test-latent-all', sample_size=4000)
 
 # %% [markdown]
 # ## K-means
 
 # %%
-tf.get_logger().setLevel('ERROR')
+%%time
 
 dc = None
 dc = DeepLatentCluster(
-    'test-latent-10k-GMM',
+    'test-latent-all-Kmeans',
     {
-        'train_size':10000,
+        'train_size':0,
         'reconstr_weight':1.0,
         'latent_weight':1e-5,
         "cluster": "Kmeans"
     })
 # dc.make_model()
 # dc.train_model()
-dc.evaluate_model(sample_size=4000)
+dc.evaluate_model('test-latent-all', sample_size=4000)
 
 # %% [markdown]
 # ## GMM
 
 # %%
-tf.get_logger().setLevel('ERROR')
+%%time
 
 dc = None
 dc = DeepLatentCluster(
-    'test-latent-10k-GMM',
+    'test-latent-all-GMM',
     {
-        'train_size':10000,
+        'train_size':0,
+        'reconstr_weight':1.0,
+        'latent_weight':1e-5,
+        "cluster": "GMM"
+    })
+# dc.make_model()
+# dc.train_model()
+dc.evaluate_model('test-latent-all', sample_size=4000)
+
+# %% [markdown]
+# # Encoder Head
+
+# %%
+%%time
+#min cluster size
+
+dc = None
+dc = DeepLatentCluster(
+    'test-latent-all-OPTICS-Enc-2',
+    {
+        'train_size':0,
+        'reconstr_weight':1.0,
+        'latent_weight':1e-5,
+        "cluster": "OPTICS"
+    })
+
+dc.evaluate_model('test-latent-all', head="enc", sample_size=3000)
+
+# %% [markdown]
+# ## Optics-Encoder
+
+# %%
+%%time
+
+dc = None
+dc = DeepLatentCluster(
+    'test-latent-all-OPTICS-Enc',
+    {
+        'train_size':0,
+        'reconstr_weight':1.0,
+        'latent_weight':1e-5,
+        "cluster": "OPTICS"
+    })
+
+dc.evaluate_model('test-latent-all', head="enc", sample_size=3000)
+
+# %% [markdown]
+# ## Agglomerative-Encoder
+
+# %%
+%%time
+
+dc = None
+dc = DeepLatentCluster(
+    'test-latent-all-agg-enc',
+    {
+        'train_size':0,
+        'reconstr_weight':1.0,
+        'latent_weight':1e-5,
+        "cluster": "agg"
+    })
+# dc.make_model()
+# dc.train_model()
+dc.evaluate_model('test-latent-all', head='enc',  sample_size=4000)
+
+# %% [markdown]
+# ## KMeans-Encoder
+
+# %%
+%%time
+
+dc = None
+dc = DeepLatentCluster(
+    'test-latent-all-Kmeans-Enc',
+    {
+        'train_size':0,
         'reconstr_weight':1.0,
         'latent_weight':1e-5,
         "cluster": "Kmeans"
     })
+
+dc.evaluate_model('test-latent-all', head="enc", sample_size=4000)
+
+# %% [markdown]
+# ## GMM-Encoder
+
+# %%
+%%time
+
+dc = None
+dc = DeepLatentCluster(
+    'test-latent-all-GMM-Enc',
+    {
+        'train_size':0,
+        'reconstr_weight':1.0,
+        'latent_weight':1e-5,
+        "cluster": "GMM"
+    })
+
+dc.evaluate_model('test-latent-all', head="enc", sample_size=4000)
+
+# %% [markdown]
+# # Decoder Head
+# 
+
+# %% [markdown]
+# ## Optics-AE
+
+# %%
+%%time
+
+dc = None
+dc = DeepLatentCluster(
+    'test-latent-all-OPTICS-AE',
+    {
+        'train_size':0,
+        'reconstr_weight':1.0,
+        'latent_weight':1e-5,
+        "cluster": "OPTICS"
+    })
+
+dc.evaluate_model('test-latent-all', head="ae", sample_size=3000)
+
+# %% [markdown]
+# ## GMM-AE
+
+# %%
+%%time
+
+dc = None
+dc = DeepLatentCluster(
+    'test-latent-all-GMM-AE2',
+    {
+        'train_size':0,
+        'reconstr_weight':1.0,
+        'latent_weight':1e-5,
+        "cluster": "GMM"
+    })
+
+dc.evaluate_model('test-latent-all', head="ae", sample_size=4000)
+
+# %%
+%%time
+
+dc = None
+dc = DeepLatentCluster(
+    'test-latent-all-GMM-AE',
+    {
+        'train_size':0,
+        'reconstr_weight':1.0,
+        'latent_weight':1e-5,
+        "cluster": "GMM"
+    })
+
+dc.evaluate_model('test-latent-all', head="ae", sample_size=4000)
+
+# %% [markdown]
+# ## Kmeans-AE
+
+# %%
+%%time
+
+dc = None
+dc = DeepLatentCluster(
+    'test-latent-all-Kmeans-AE',
+    {
+        'train_size':0,
+        'reconstr_weight':1.0,
+        'latent_weight':1e-5,
+        "cluster": "Kmeans"
+    })
+
+dc.evaluate_model('test-latent-all', head="ae", sample_size=4000)
+
+# %%
+stop
+
+# %% [markdown]
+# # Benchmark
+
+# %%
+
+
+dc = None
+dc = DeepLatentCluster(
+    'test-latent-10k-Benchmark',
+    {
+        'train_size':0,
+        'reconstr_weight':1.0,
+        'latent_weight':1e-5,
+        "cluster": "OPTICS"
+    })
 # dc.make_model()
 # dc.train_model()
-dc.evaluate_model(sample_size=2000)
-
-# %%
-tf.get_logger().setLevel('ERROR')
-
-dc = DeepLatentCluster(
-        'test-latent', 
-        {
-          'train_size':1000,
-          'reconstr_weight':1.0, 'latent_weight':1e-5
-        })
-dc.make_model()
-print(dc.autoencoder.summary())
-
-# %%
-
-dc.evaluate_model(1000, sample_size=1000)
-
-# %%
-tf.get_logger().setLevel('ERROR')
-
-dc = DeepLatentCluster(
-    'test-latent-10k',
-    {
-        'train_size':10000,
-        'reconstr_weight':1.0, 'latent_weight':1e-5
-    })
-dc.make_model()
-# dc.train_model()
-
-
-# %%
-dc.evaluate_model(10000, sample_size=1000)
+dc.benchmark_model(sample_size=2000)
 
 # %%
 stop
@@ -1074,7 +1328,7 @@ dc.make_model()
 dc.evaluate_model(10000, sample_size=1000)
 
 # %% [markdown]
-# # benchmark
+# # Hypertuning
 
 # %%
 # optimal eps https://iopscience.iop.org/article/10.1088/1755-1315/31/1/012012/pdf
