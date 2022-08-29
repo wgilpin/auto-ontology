@@ -9,6 +9,7 @@
 import os
 import math
 import numpy as np
+import glob
 from typing import Any
 import tensorflow as tf
 import tensorflow.keras as k
@@ -30,24 +31,17 @@ from sklearn.metrics import (
             f1_score, accuracy_score, precision_score, recall_score, classification_report)
 from data import load_data
 from wordcloud import WordCloud
-import seaborn as sns
+from timer import timer
 import umap
 
 # %%
 from sklearn.metrics import pairwise
-def pairwise_sqd_distance(X, batch_size):
+def pairwise_sqd_distance(X):
     return pairwise.pairwise_distances(X, metric='sqeuclidean')
-
-    tiled = tf.tile(tf.expand_dims(X, axis=1), tf.stack([1, batch_size, 1]))
-    tiled_trans = tf.transpose(tiled, perm=[1,0,2])
-    diffs = tiled - tiled_trans
-    sqd_dist_mat = tf.reduce_sum(tf.square(diffs), axis=2)
-
-    return sqd_dist_mat
 
 def make_q(z, batch_size, alpha):
 
-    sqd_dist_mat = np.float32(pairwise_sqd_distance(z, batch_size))
+    sqd_dist_mat = np.float32(pairwise_sqd_distance(z))
     q = tf.pow((1 + sqd_dist_mat/alpha), -(alpha+1)/2)
     q = tf.linalg.set_diag(q, tf.zeros(shape=[batch_size]))
     q = q / tf.reduce_sum(q, axis=0, keepdims=True)
@@ -102,7 +96,7 @@ def do_clustering(
         gmix = mixture.GaussianMixture(
                         n_components=n_clusters,
                         covariance_type='full',
-                        verbose=2)
+                        verbose=params['verbose'])
         gmix.fit(z_state)
         y_pred = gmix.predict(z_state)
         # get centres
@@ -113,7 +107,7 @@ def do_clustering(
                 mean=gmix.means_[i]).logpdf(z_state)
             centers[i, :] = z_state[np.argmax(density)]
     elif clustering == 'Kmeans':
-        kmeans = KMeans(n_clusters=n_clusters, n_init=10)
+        kmeans = KMeans(n_clusters=n_clusters, n_init=10, verbose=params['verbose'])
         y_pred = kmeans.fit_predict(z_state)
         centers = kmeans.cluster_centers_
     elif clustering == 'DBSCAN':
@@ -259,6 +253,7 @@ class DeepLatentCluster():
                 epsilon=None,
                 decay=0.0,
                 amsgrad=False),
+            "noise_factor": 0.0,
             "loss": k.losses.binary_crossentropy,
             "train_size": 10000,
             "num_clusters": 25,
@@ -269,7 +264,7 @@ class DeepLatentCluster():
             "latent_weight": 0.0001,
             "reconstr_weight": 1.0,
             "max_iter": 8000,
-            "pretrain_epochs": 300,
+            "pretrain_epochs": 1000,
             "emb_size": 768,
             "alpha1": 20,
             "alpha2": 1,
@@ -411,18 +406,14 @@ class DeepLatentCluster():
         Create the entire model.
 
         """
-        print("Autoencoder")
-        # enc = self.create_ae_encoder_model()
-        # dec = self.create_ae_decoder_model(
-        #     input_layer=enc[-1])
-
+        self.output("Autoencoder")
         enc, dec = self.autoencoder_model(
             [768, 500, 500, 2000, 40],
             init_fn=self.config['ae_init_fn'],
             act='relu',
             verbose=self.verbose)
-        print("Latent Model")
 
+        self.output("Latent Model")
         latent_space = self.create_latent_space_model(
             input_layer=enc[-1])
         self.model = k.Model(
@@ -479,8 +470,7 @@ class DeepLatentCluster():
         """
         Run the model.
         """
-        if verbose:
-            self.verbose = verbose
+        self.verbose = verbose
 
         if self.x is None:
             self.make_data(oversample=True)
@@ -503,26 +493,25 @@ class DeepLatentCluster():
         self.autoencoder.save_weights(
             os.path.join(self.save_dir, 'ae_weights.h5'))
         self.output("Trained autoencoder")
-        if self.verbose > 0:
-            # summarize history for loss
-            plt.plot(history.history['loss'])
-            plt.title('Autoencoder pretraining loss')
-            plt.ylabel('loss')
-            plt.xlabel('epoch')
-            plt.show()
+        
+        # summarize history for loss
+        plt.plot(history.history['loss'])
+        plt.title('Autoencoder pretraining loss')
+        plt.ylabel('loss')
+        plt.xlabel('epoch')
+        plt.show()
 
         # # init cluster centres before train
         # self.init_cluster_centers()
 
         # train full model
         losses = self.train()
-        if self.verbose > 0:
-            # summarize history for loss
-            plt.plot(losses)
-            plt.title('Full model loss')
-            plt.ylabel('loss')
-            plt.xlabel('epoch')
-            plt.show()
+        # summarize history for loss
+        plt.plot(losses)
+        plt.title('Full model loss')
+        plt.ylabel('loss')
+        plt.xlabel('epoch')
+        plt.show()
 
         print("Training Done")
 
@@ -535,6 +524,13 @@ class DeepLatentCluster():
         return (top.T / top.sum(axis=1)).T
 
     def train_step(self, x, y):
+        if self.config['noise_factor'] > 0.0:
+            x = x + self.config['noise_factor'] * tf.random.normal(
+                                                        shape=tf.shape(x),
+                                                        mean=0.0,
+                                                        stddev=1.0,
+                                                        dtype=tf.float32) 
+            # x = tf.clip_by_value(x, 0.0, 1.0)
         with tf.GradientTape() as tape:
             dec, lat = self.model(x, training=True)
             loss_l = self.latent_loss(self.encoder(x))(y, lat)
@@ -560,7 +556,7 @@ class DeepLatentCluster():
         losses = []
         for ite in range(int(self.config['max_iter'])):
             if ite % update_interval == 0:
-                print(f"Iter:{ite} -> loss:{loss}")
+                self.output(f"Iter:{ite} -> loss:{loss}")
             idx = index_array[
                 index * self.batch_size:
                 min((index+1) * self.batch_size, self.x.shape[0])]
@@ -570,6 +566,7 @@ class DeepLatentCluster():
             patience = 5
             max_delta = np.max(np.abs(losses[-patience:] - losses[-1]))
             if len(losses)>3 and max_delta < tol:
+                print("Stop traing for tolerance threshold reached")
                 break
         if self.verbose == 0:
             # final values
@@ -604,22 +601,6 @@ class DeepLatentCluster():
         self.output(f"Loading model weights from {model_weights_file}")
         self.model.load_weights(model_weights_file)
 
-    def visualise_umap(self, sample: int = 1000, embs: str = "z"):
-        if embs == "z":
-            # encoder output
-            z_enc = self.encoder.predict(self.x)
-        elif embs == "x":
-            # raw BERT embeddings
-            z_enc = self.x
-        indices = np.random.choice(z_enc.shape[0], sample, replace=False)
-        labels = self.y_pred[indices]
-        labels = np.asarray(
-            [(self.mapping[l] if l in self.mapping else l) for l in labels])
-        z_sample = z_enc[indices]
-        mapper = umap.UMAP(metric='manhattan').fit(z_sample)
-        import umap.plot as plt_u
-        plt_u.points(mapper, labels=labels)
-        umap.plot.plt.show()
 
     @staticmethod
     def get_freqs(word_list):
@@ -664,7 +645,7 @@ class DeepLatentCluster():
         """
         if head is None:
             head = 'z'
-        print(f"Using [{head}] head for predictions")
+        self.output(f"Using [{head}] head for predictions")
         
         x_sample, y_sample, str_sample = self.get_sample(sample_size)
 
@@ -675,7 +656,7 @@ class DeepLatentCluster():
 
         # run the model on sampled x in batches
         z_sample = []
-        for i in trange(num_batches):
+        for i in trange(num_batches, disable=self.verbose == 0):
             idx = np.arange(
                 i * self.batch_size,
                 min(len(x_sample), (i + 1) * self.batch_size))
@@ -695,21 +676,28 @@ class DeepLatentCluster():
         return z_space, y_sample, str_sample
 
     def apply_cluster_algo(self, z_sample, y_sample):
-        print(f"Clustering {z_sample.shape[0]} points "
-              f"using {self.config['cluster']}")
+        self.output(f"Clustering {z_sample.shape[0]} points "
+                    f"using {self.config['cluster']}")
         y_pred_sample, c = do_clustering(
             clustering=self.config['cluster'],
             n_clusters=self.config['num_clusters'],
-            z_state=z_sample)
+            z_state=z_sample,
+            params={'verbose': self.verbose})
         if self.config['cluster'] in ['DBSCAN', 'OPTICS']:
             self.config['num_clusters'] = len(c)
 
-        print("Visualising")
+        self.output("Visualising")
         y_label = np.asarray(
             [(self.mapping[l] if l in self.mapping else l) for l in y_sample])
-        mapper = umap.UMAP(metric='manhattan', verbose=True).fit(z_sample)
+        mapper = umap.UMAP(metric='manhattan', verbose=self.verbose > 0).fit(z_sample)
         import umap.plot as plt_u
-        plt_u.points(mapper, labels=y_label)
+        plt_u.points(mapper, labels=y_label, height=1200, width=1200)
+
+        save_file = os.path.join(self.save_dir, "UMAP.png")
+        plt_u.plt.savefig(save_file)
+        if self.verbose > 0:
+            plt_u.plt.show()
+        plt_u.plt.close()
 
         return y_pred_sample, y_label
 
@@ -840,8 +828,8 @@ class DeepLatentCluster():
                 f1_list.append(f1)
                 size_list.append(ce['n']/sample.shape[0])
 
-            print(f"#{cluster_name}:{c_no} size:{len(c)} "
-                    f"prec:{prec:.4f} rec:{rec:.4f} f1:{f1:.4f}")
+            self.output(f"#{cluster_name}:{c_no} size:{len(c)} "
+                        f"prec:{prec:.4f} rec:{rec:.4f} f1:{f1:.4f}")
 
         # full cluster
         print(f"\nF1 by Known Clusters: {np.dot(f1_list, size_list):.4f}")
@@ -868,7 +856,6 @@ class DeepLatentCluster():
         precision = precision_score(
             y, y_pred, average='macro')
         recall = recall_score(y, y_pred, average='macro')
-        print("\n")
         print(f"F1 score (macro) = {f1:.4f}")
         print(f"Accuracy = {acc:.4f}")
         print(f"Precision = {precision:.4f}")
@@ -892,6 +879,10 @@ class DeepLatentCluster():
         cluster_list = sorted(
                         cluster_list,
                         key=lambda x: int(x['name'][0:3] != "UNK"))
+        
+        # delete old wordcloud files
+        for f in glob.glob(f"{self.save_dir}/wordcloud*.png"):
+            os.remove(f)
         for i, cluster in enumerate(cluster_list):
                 save_file = os.path.join(self.save_dir,
                                          f"wordcloud-{cluster['name']}.png")
@@ -956,6 +947,7 @@ class DeepLatentCluster():
         # output file
         self.save_scores(cluster_list, scores_agg)
 
+    @timer
     def evaluate_model(self, load_dir: str, sample_size: int = 0, head: str=None, verbose: int = 1) -> None:
         """
         Run the model.
@@ -1037,6 +1029,7 @@ dc = DeepLatentCluster(
         'reconstr_weight':1.0,
         'latent_weight':1e-5,
         "cluster": None
+        "noise_factor": 0.0,
     })
 dc.make_model()
 dc.train_model()
@@ -1293,7 +1286,7 @@ stop
 # # Benchmark
 
 # %%
-
+%%time
 
 dc = None
 dc = DeepLatentCluster(
@@ -1302,11 +1295,11 @@ dc = DeepLatentCluster(
         'train_size':0,
         'reconstr_weight':1.0,
         'latent_weight':1e-5,
-        "cluster": "OPTICS"
+        "cluster": "Kmeans"
     })
 # dc.make_model()
 # dc.train_model()
-dc.benchmark_model(sample_size=2000)
+dc.benchmark_model(sample_size=4000, verbose=0)
 
 # %%
 stop
@@ -1344,23 +1337,6 @@ def optimal_eps(X, n_neighbors=10):
     plt.plot(distances)
 
 # %%
-def cluster_score(y, y_pred, n_clusters):
-    """
-    Compute the cluster score.
-    Arguments:
-        y: true labels.
-        y_pred: predicted labels.
-        n_clusters: number of clusters.
-    Returns:
-        cluster score.
-    """
-    # compute the cluster score
-    score = 0
-    for i in range(n_clusters):
-        score += np.sum(y_pred[y==i]==i)
-    return score/len(y)
-
-# %%
 def hypertune_density_clustering():
     """
     hypertune the density clustering algorithms.
@@ -1384,97 +1360,149 @@ def hypertune_density_clustering():
 # %%
 hypertune_density_clustering()
 
-# %%
-def run_benchmark(cluster:str, eval_size:int, n_clusters:int):
-    x, y, mapping, strings = load_data(
-                                    eval_size,
-                                    oversample=False,
-                                    get_text=True)
-    save_dir = f'./results/bm/{cluster}'
-    if not os.path.exists(save_dir):
-        # create save dir
-        os.makedirs(save_dir)
-
-    
-    # predict cluster labels
-    print("Predicting...")
-    y_pred, _ = do_clustering(cluster, n_clusters, x)
-    # print(f"ACC: {cluster_acc(y, y_pred)}")
-    
-    # confusion matrix
-    cm_width = max(8, len(np.unique(y_pred)) * 2)
-    cm_width = min(16, cm_width)
-    plot_confusion(y, y_pred, mapping, save_dir, cm_width)
-
-    # show wordclouds for each cluster
-    print ("BENCHMARK CLUSTERS")
-    clusters = {}
-    predicted = DataFrame({'text':strings, 'y_pred':y_pred, 'y_true':y})
-    for cluster_no in range(n_clusters):
-        y_pred_for_key = predicted[predicted['y_pred']==cluster_no]
-        true_label = 'UNKNOWN'
-        modal_value = y_pred_for_key['y_true'].mode()
-        if len(modal_value)>0:
-            if modal_value[0] in mapping:
-                true_label = mapping[modal_value[0]]
-            # confidence - fraction of this cluster that is actually this cluster
-            y_true_this_cluster = len(
-                y_pred_for_key[y_pred_for_key['y_true']==modal_value[0]])
-            frac = y_true_this_cluster/len(y_pred_for_key)
-        else:
-            frac = 0
-
-        # wordcloud
-        unique, counts = np.unique(y_pred_for_key['text'], return_counts=True)
-        freq_list = np.asarray((unique, counts)).T
-        freq_list =  sorted(freq_list, key=lambda x: -x[1])[0:50]
-        freqs = {w: f for w,f in freq_list}
-        entry = {'freqs':freqs, 'frac':frac, 'n':len(y_pred_for_key)}
-        if true_label == 'UNKNOWN':
-            clusters[f"UNK-{cluster_no}"] = entry
-        elif true_label in clusters:
-            if clusters[true_label]['frac'] < frac:
-                # we found a better cluster for this label
-                clusters[true_label] = entry
-            else:
-                # this cluster is worse than this one, so it's unknown
-                clusters[f"UNK-{cluster_no} Was {true_label}"] = entry
-        else:
-            clusters[true_label] = entry
-
-    cluster_list = [{
-        **clusters[c],
-        'name': c,
-        'idx': idx} for idx, c in enumerate(clusters)]
-    cluster_list = sorted(cluster_list, key=lambda x: -x['frac'])
-
-    display_list = []
-    # show unknown clusters first
-    for i, cluster in enumerate(cluster_list):
-        if cluster['name'][0:3] == "UNK":
-            save_file = os.path.join(save_dir,
-                                     f"wordcloud-{cluster['name']}.png")
-            show_wordcloud(i, cluster, save_file, save_only=True)
-            display_list.append(cluster)
-
-    # next show known clusters
-    for i, cluster in enumerate(cluster_list):
-        if cluster['name'][0:3] != "UNK":
-            save_file = os.path.join(save_dir,
-                                     f"wordcloud-{cluster['name']}.png")
-            show_wordcloud(i, cluster, save_file, save_only=True)
-            display_list.append(cluster)
-
-    
-    print(write_results_page(display_list, save_dir, cluster))
+# %% [markdown]
+# # Train with noise
 
 # %%
-run_benchmark('Kmeans', 10000, 25)
+tf.get_logger().setLevel('ERROR')
+
+dc = None
+dc = DeepLatentCluster(
+        'test-latent-noise',
+        {
+            'train_size':0,
+            'reconstr_weight':1.0,
+            'latent_weight':1e-5,
+            "cluster": None,
+            "noise_factor": 0.5,
+        })
+dc.make_model()
+dc.train_model(verbose=0)
+
+# %% [markdown]
+# # Evaluate all 
+
+# %% [markdown]
+# ## different entity counts in training
+
+# %% [markdown]
+# ## No noise
 
 # %%
-run_benchmark('GMM', 10000, 25)
+for entity_count in [0, 5, 10, 15]:
+    run_name = f'test-latent-no-noise-{entity_count}-ents'
+    print('-'*50)
+    print(f"{run_name}")
+    print('-'*50)
+
+    dc = None
+    dc = DeepLatentCluster(
+        run_name,
+        {
+            'train_size':0,
+            'reconstr_weight':1.0,
+            'latent_weight':1e-5,
+            "cluster": 'Kmeans',
+            "entity_count": entity_count,
+        })
+    dc.make_model()
+    dc.train_model(verbose=0)
+    dc.evaluate_model(
+            run_name,
+            head='z',
+            sample_size=4000,
+            verbose=0)
+
+# %% [markdown]
+# ## with noise
 
 # %%
-run_benchmark('agg', 10000, 25)
+for entity_count in [0, 5, 10, 15]:
+    run_name = f'test-latent-noise-{entity_count}-ents'
+    print('-'*50)
+    print(f"{run_name}")
+    print('-'*50)
+
+    dc = None
+    dc = DeepLatentCluster(
+        run_name,
+        {
+            'train_size':0,
+            'reconstr_weight':1.0,
+            'latent_weight':1e-5,
+            "cluster": 'Kmeans',
+            "entity_count": entity_count,
+            "noise_factor": 0.5,
+        })
+    dc.make_model()
+    dc.train_model(verbose=0)
+    dc.evaluate_model(
+            run_name,
+            head='z',
+            sample_size=4000,
+            verbose=0)
+
+# %% [markdown]
+# # Grid Search Clustering
+
+# %% [markdown]
+# ## with noise
+
+# %%
+heads = ["z", "ae", "enc"]
+clusterers = {"Kmeans": 4000, "GMM": 4000, "OPTICS":3000, "agg":4000}
+
+for head in heads:
+    for clusterer in clusterers:
+        run_name = f'test-latent-noise-15-ents-{head}-{clusterer}'
+        print('-'*50)
+        print(f"{run_name}")
+        print('-'*50)
+        
+        dc = None
+        dc = DeepLatentCluster(
+            run_name,
+            {
+                'train_size':0,
+                'reconstr_weight':1.0,
+                'latent_weight':1e-5,
+                "cluster": clusterer,
+            })
+        
+        dc.evaluate_model(
+                f'test-latent-noise-15-ents',
+                head=head,
+                sample_size=clusterers[clusterer],
+                verbose=0)
+
+# %% [markdown]
+# ## Evaluate all without noise
+
+# %%
+heads = ["z", "ae", "enc"]
+clusterers = {"Kmeans": 4000, "GMM": 4000, "OPTICS":3000, "agg":4000}
+
+for head in heads:
+    for clusterer in clusterers:
+        run_name = f'test-latent-noise-15-ents-{head}-{clusterer}'
+        print('-'*50)
+        print(f"{run_name}")
+        print('-'*50)
+        
+        dc = None
+        dc = DeepLatentCluster(
+            run_name,
+            {
+                'train_size':0,
+                'reconstr_weight':1.0,
+                'latent_weight':1e-5,
+                "cluster": clusterer,
+            })
+        
+        dc.evaluate_model(
+                f'test-latent-noise-15-ents',
+                head=head,
+                sample_size=clusterers[clusterer],
+                verbose=0)
 
 
