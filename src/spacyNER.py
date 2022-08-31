@@ -1,5 +1,7 @@
 # %%
 # Perform standard imports
+import os
+import pickle
 from typing import Tuple
 import pandas as pd
 import spacy
@@ -168,27 +170,66 @@ class TrainingDataSpacy():
             radius: int=0,
             embed_sentence_level: bool = False):
         self.nlp = spacy.load('en_core_web_sm')
-        self.emb_pipe = get_pipe()
+        self.emb_pipe = None
         self.radius = radius
         self.embed_sentence_level = embed_sentence_level
         self.mapping = {}
         self.skip_chunks = ["it"]
+        self.embeddings = None
+        self.data_name = ""
+        self.sents = None
 
-    def embed_text(self, sent: str, start: int=0, end: int=0, embeddings: list=None):
+    def embed_all(self):
+        """
+        Embeds all sentences in the data.
+        """
+        print("pre-embedding all")
+        self.embeddings = []
+        self.emb_pipe = get_pipe()
+        for sent in tqdm(self.sents):
+            self.embeddings.append(embed(self.emb_pipe, sent))
+        with open(self.data_name, 'wb') as handle:
+            pickle.dump(self.embeddings, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        print(f"Emedded {len(self.embeddings)} sentences")
+        print(f"Saved to {self.data_name}")
+
+    def load_embs_cache(self):
+        """
+        Loads the embeddings cache.
+        """
+        if os.path.exists(self.data_name) :
+            print(f"Loading {self.data_name}") 
+            self.embeddings = pd.read_pickle(self.data_name)
+        else:
+            self.embed_all()
+
+
+    def cached_sent_embed(self, sentence_no: int) -> np.ndarray:
+        """
+        Returns the cached sentence embedding.
+        """
+        if self.embeddings is None :
+            self.load_embs_cache()
+        return self.embeddings[sentence_no]
+        
+
+    def embed_text(self, sent: str, sent_no: int, start: int=0, end: int=0, embeddings: list=None):
         """
         embeds a sentence and returns the embedding
         """
         if self.embed_sentence_level:
             # embed whole sentence, then return appropriate part
             if embeddings is None:
-                embeddings = embed(self.emb_pipe, sent)
+                embeddings = self.cached_sent_embed(sent_no)
             return np.mean(embeddings[start+1:end+1], axis=0)
         else:
             # embed only chunk
+            self.emb_pipe = get_pipe()
             embeddings = embed(self.emb_pipe, sent)
             return embeddings[0]
 
     def embed_chunk(self,
+            sent_no: int,
             doc,
             span,
             is_entity: bool,
@@ -209,10 +250,10 @@ class TrainingDataSpacy():
 
         if self.embed_sentence_level:
             # we have the embeddings for the whole sentence already
-            embedding = self.embed_text(str(doc), start_tok, end_tok, embeddings)
+            embedding = self.embed_text(str(doc), sent_no, start_tok, end_tok, embeddings)
         else:
             # will have to embed the chunk
-            embedding = self.embed_text(short_sent, start_tok, end_tok)
+            embedding = self.embed_text(short_sent, sent_no, start_tok, end_tok)
 
         return{
             "sentence": str(doc),
@@ -223,7 +264,7 @@ class TrainingDataSpacy():
             "embedding": embedding,
         }
 
-    def embed_sentence(self, sent) -> list[dict]:
+    def embed_sentence(self, sent, sent_no: int) -> list[dict]:
         """
         Returns a list of embeddings for each chunk or entity in the sentence
         """
@@ -236,21 +277,23 @@ class TrainingDataSpacy():
                 continue
             if embs is None and self.embed_sentence_level:
                 # calculate embeddings once for whole sentence
-                embs = embed(self.emb_pipe, sent)
-            item = self.embed_chunk(s, nc, is_entity=False, embeddings=embs)
+                embs = self.cached_sent_embed(sent_no)
+            item = self.embed_chunk(sent_no, s, nc, is_entity=False, embeddings=embs)
             res.append(item)
             for ent in nc.ents:
                 if ent.start == nc.start and ent.end == nc.end:
                     # same span
                     res.append(
                         self.embed_chunk(
-                            s, ent, is_entity=True, embeddings=embs))
+                            sent_no, s, ent, is_entity=True, embeddings=embs))
         return res
 
     @timer
     def get_training_data_spacy(self,
                     sents: list[str],
-                    length: int = 10) -> Tuple[pd.DataFrame, dict]:
+                    length: int = 10,
+                    name:str = None
+                    ) -> Tuple[pd.DataFrame, dict]:
         """
         Creates training data for the autoencoder given a list of sentences
         """
@@ -259,12 +302,17 @@ class TrainingDataSpacy():
             length if length > 0 else 'all',
             self.radius)
 
+        self.data_name = os.path.join("./data", name)
+        self.sents = sents
+        if self.embed_sentence_level:
+            self.load_embs_cache()
+
         # get embedding data
         res = []
         mapping={}
-        print("Embedding sentences")
-        for sent in tqdm(sents):
-            res.extend(self.embed_sentence(sent))
+        print(f"Embedding sentences radius {self.radius}")
+        for sent_no, sent in tqdm(enumerate(sents)):
+            res.extend(self.embed_sentence(sent, sent_no))
 
         emb_df = pd.DataFrame(np.stack([m["embedding"] for m in res]))
         rest_df = pd.DataFrame(res).drop('embedding', axis=1)

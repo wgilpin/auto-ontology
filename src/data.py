@@ -288,6 +288,7 @@ def load_data(
         get_text: bool=False,
         oversample: bool=True,
         verbose:int=1,
+        radius: int=0,
         train:bool=True) -> Tuple[pd.DataFrame, pd.DataFrame, dict, list]:
     """
     Load data from disk
@@ -305,8 +306,8 @@ def load_data(
         entity_filter = []
     ds_name = ''if train else '_test'
 
-    filename_data = f"./data/conll_spacy_{size}{ds_name}.pkl"
-    filename_mapping = f"./data/conll_spacy_{size}{ds_name}_map.pkl"
+    filename_data = f"./data/conll_spacy_n{size}_r{radius}{ds_name}.pkl"
+    filename_mapping = f"./data/conll_spacy_n{size}_r{radius}{ds_name}_map.pkl"
     if os.path.exists(filename_data) and os.path.exists(filename_mapping):
         output(f"Loading {filename_data}", verbose)
         trg = pd.read_pickle(filename_data)
@@ -314,16 +315,21 @@ def load_data(
             mapping = pickle.load(handle)
             output(verbose=verbose, s=f"LOADED {mapping}")
     else:
-        output("Creating data", verbose)
+        print("Creating data")
         sample_conll = get_sample_conll_hf(size, train=train)
-
+        sample_name = f"conll_n{size}_{'train' if train else 'test'}"
+        
         embedder = TrainingDataSpacy(
-            embed_sentence_level=True)
-        trg, mapping = embedder.get_training_data_spacy(sents=sample_conll)
+            embed_sentence_level=True,
+            radius=radius)
+        trg, mapping = embedder.get_training_data_spacy(
+                                                sents=sample_conll,
+                                                name = sample_name)
         trg.to_pickle(filename_data)
         with open(filename_mapping, 'wb') as handle:
             pickle.dump(mapping, handle, protocol=pickle.HIGHEST_PROTOCOL)
-        output(verbose=verbose, s=f"SAVED {mapping}")
+        print(f"SAVED {filename_data}")
+        output(f"Map {mapping}", verbose)
 
     if entity_filter:
         # entity_filter to id list

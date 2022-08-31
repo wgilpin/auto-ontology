@@ -258,6 +258,7 @@ class DeepLatentCluster():
             "train_size": 10000,
             "num_clusters": 25,
             "cluster": "GMM",
+            "radius": 0,
             "entities": None,
             "entity_count": 10,
             "loss_weights": None,
@@ -275,7 +276,10 @@ class DeepLatentCluster():
             "base_dir": "results",
         }
         if config is not None:
+            if any([k for k in config.keys() if k not in self.config.keys()]):
+                print(f"ERROR: Invalid config key {k}")
             self.config = {**self.config, **config}
+            
         if self.config['entities'] is not None and self.config['entity_count'] > 0:
             raise ValueError(
                 'entities and entity_count cannot both be specified')
@@ -305,6 +309,7 @@ class DeepLatentCluster():
             get_text=True,
             oversample=oversample,
             verbose=self.verbose,
+            radius=self.config['radius'],
             train=train)
         self.input_dim = self.x.shape[1]
         self.output("Data Loaded")
@@ -324,7 +329,7 @@ class DeepLatentCluster():
             kernel_initializer=init_fn,
             kernel_regularizer='l1')
 
-    def autoencoder_model(self, layer_specs: list, act: str = 'tanh', init_fn: str = 'glorot_uniform', verbose=0):
+    def autoencoder_model(self, layer_specs: list, act: str = 'tanh', init_fn: str = 'glorot_uniform'):
         """
         Creates the autoencoder given
         -layer_specs: list of layer sizes.
@@ -349,7 +354,7 @@ class DeepLatentCluster():
                 kernel_initializer=init_fn,
                 name=f'encoder_{i}')(encoder[-1])
             encoder += [layer]
-            if verbose >= 2:
+            if self.verbose >= 2:
                 print(f'encoder_{i}: {layer_specs[i+1]} '
                       f'activation={act}')
 
@@ -359,7 +364,7 @@ class DeepLatentCluster():
             kernel_initializer=init_fn,
             name=f'encoder_{layers - 1}')(encoder[-1])
         encoder += [latent]
-        if verbose >= 2:
+        if self.verbose >= 2:
             print(f'encoder_{layers - 1}: {layer_specs[-1]}')
 
         autoencoder = [encoder[-1]]
@@ -371,7 +376,7 @@ class DeepLatentCluster():
                 kernel_initializer=init_fn,
                 name=f'decoder_{i}')(autoencoder[-1])
             autoencoder += [layer]
-            if verbose >= 2:
+            if self.verbose >= 2:
                 print(f'encoder_{i}: {layer_specs[i]}'
                       f' activation={act}')
 
@@ -381,7 +386,7 @@ class DeepLatentCluster():
             kernel_initializer=init_fn,
             name='decoder_0')(autoencoder[-1])
         autoencoder += [layer]
-        if verbose >= 2:
+        if self.verbose >= 2:
             print(f'output: {layer_specs[0]}'
                   f'')
         return (encoder, autoencoder)
@@ -411,7 +416,7 @@ class DeepLatentCluster():
             [768, 500, 500, 2000, 40],
             init_fn=self.config['ae_init_fn'],
             act='relu',
-            verbose=self.verbose)
+        )
 
         self.output("Latent Model")
         latent_space = self.create_latent_space_model(
@@ -438,7 +443,10 @@ class DeepLatentCluster():
                 enc[-1],
             ])
 
-    def make_model(self) -> None:
+    def make_model(self, verbose: int=None) -> None:
+        if verbose is not None:
+            self.verbose = verbose
+
         self.create_model()
 
         self.model.compile(
@@ -1504,5 +1512,70 @@ for head in heads:
                 head=head,
                 sample_size=clusterers[clusterer],
                 verbose=0)
+
+# %% [markdown]
+# # Radius BMs
+
+# %%
+assert False, "One time run"
+for radius in [0,1,2,4,6]:
+    load_data(0, oversample=False, radius=radius, verbose=0)
+
+# %% [markdown]
+# ## Z-head different radii
+
+# %%
+for radius in [0,1,2,4,6]:
+    run_name = f'test-latent-noise-15-ents-r{radius}-Kmeans'
+    print('-'*50)
+    print(f"{run_name}")
+    print('-'*50)
+    
+    dc = None
+    dc = DeepLatentCluster(
+        run_name,
+        {
+            'train_size':0,
+            'reconstr_weight':1.0,
+            'latent_weight':1e-5,
+            "cluster": "Kmeans",
+            "radius": radius,
+        })
+    # dc.make_model()
+    # dc.train_model(verbose=0)
+    dc.evaluate_model(
+            run_name,
+            head="z",
+            sample_size=4000,
+            verbose=0)
+
+# %% [markdown]
+# ## Encoder head, different radii
+
+# %%
+
+for radius in [0,1,2,4,6]:
+    run_name = f'test-latent-noise-15-ents-r{radius}-Kmeans-enc'
+    print('-'*50)
+    print(f"{run_name}")
+    print('-'*50)
+    
+    dc = None
+    dc = DeepLatentCluster(
+        run_name,
+        {
+            'train_size':0,
+            'reconstr_weight':1.0,
+            'latent_weight':1e-5,
+            "cluster": "Kmeans",
+            "radius": radius,
+        })
+    dc.make_model()
+    dc.train_model(verbose=0)
+    dc.evaluate_model(
+            run_name,
+            head="enc",
+            sample_size=4000,
+            verbose=0)
 
 
