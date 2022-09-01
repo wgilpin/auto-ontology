@@ -127,8 +127,8 @@ def do_clustering(
     elif clustering=="agg":
         agg = AgglomerativeClustering(
             n_clusters=n_clusters,
-            affinity='manhattan',
-            linkage='average')
+            affinity='euclidean',
+            linkage='ward')
         y_pred = agg.fit_predict(z_state)
         centers = None
     else:
@@ -812,16 +812,25 @@ class DeepLatentCluster():
             c_ent = ce['entity_id']
 
             # the right entity class in the right cluster
-            TP = c[(c.y_pred_new == c_ent) & (c.y_true == c_ent)].shape[0]
+            TP = c[
+                # in this cluster
+                (c.y_pred_new == c_ent) &\
+                # and this is the right class
+                (c.y_true == c_ent)].shape[0]
 
             # this cluster, we think it's right entity but not the right entity 
-            FP = c[(c.y_pred_new == c_ent) & (c.y_true != c_ent)].shape[0]
+            FP = c[
+                # in this cluster
+                (c.y_pred_new == c_ent) &\
+                # but not the right entity class
+                (c.y_true != c_ent)].shape[0]
 
             # it's the right entity in wrong cluster
             FN = sample[
-                (sample.y_pred_new == c_ent) &\
-                (sample.y_true == c_ent) &\
-                (sample.y_pred != c_no)].shape[0]
+                # not in this cluster
+                (sample.y_pred_new != c_ent) &\
+                # but should be
+                (sample.y_true == c_ent)].shape[0]
             
             f1, prec, rec = self.calc_metrics(TP, FP, FN)
 
@@ -840,14 +849,15 @@ class DeepLatentCluster():
                         f"prec:{prec:.4f} rec:{rec:.4f} f1:{f1:.4f}")
 
         # full cluster
-        print(f"\nF1 by Known Clusters: {np.dot(f1_list, size_list):.4f}")
+        f1 = np.dot(f1_list, size_list)
+        print(f"\nF1 by Known Clusters: {f1:.4f}")
 
         # print(classification_report(
         #     sample['y_true'],
         #     sample['y_pred_new'],
         #     labels=[l for k,l in self.mapping.items()] ))
 
-        return sample, clusters
+        return sample, clusters, f1
 
     def show_core_metrics(self, y_sample, y_pred_sample, all_clusters):
         # confusion matrix
@@ -976,7 +986,7 @@ class DeepLatentCluster():
         y_pred_sample, y_label = self.apply_cluster_algo(z_sample, y_sample)
 
         # assign labels to the clusters
-        all_clusters, clusters = self.eval_cluster(y_pred_sample, y_sample, y_label, str_sample)
+        all_clusters, clusters, cluster_f1 = self.eval_cluster(y_pred_sample, y_sample, y_label, str_sample)
 
         # overall scores
         scores_agg = self.show_core_metrics(y_sample, y_pred_sample, all_clusters)
@@ -986,6 +996,10 @@ class DeepLatentCluster():
 
         # output file
         self.save_scores(cluster_list, scores_agg)
+
+        scores = {**scores_agg, 'cluster F1': cluster_f1}
+        
+        return scores
 
     def benchmark_model(self, sample_size: int = 0, verbose: int = 1) -> None:
         """
@@ -1157,7 +1171,7 @@ dc = DeepLatentCluster(
         "cluster": "OPTICS"
     })
 
-dc.evaluate_model('test-latent-all', head="enc", sample_size=3000)
+dc.evaluate_model('test-latent-all', head="enc", sample_size=3000, verbose=0)
 
 # %% [markdown]
 # ## Agglomerative-Encoder
@@ -1176,7 +1190,7 @@ dc = DeepLatentCluster(
     })
 # dc.make_model()
 # dc.train_model()
-dc.evaluate_model('test-latent-all', head='enc',  sample_size=4000)
+dc.evaluate_model('test-latent-all', head='enc',  sample_size=4000, verbose=0)
 
 # %% [markdown]
 # ## KMeans-Encoder
@@ -1194,7 +1208,7 @@ dc = DeepLatentCluster(
         "cluster": "Kmeans"
     })
 
-dc.evaluate_model('test-latent-all', head="enc", sample_size=4000)
+dc.evaluate_model('test-latent-all', head="enc", sample_size=4000, verbose=0)
 
 # %% [markdown]
 # ## GMM-Encoder
@@ -1212,7 +1226,7 @@ dc = DeepLatentCluster(
         "cluster": "GMM"
     })
 
-dc.evaluate_model('test-latent-all', head="enc", sample_size=4000)
+dc.evaluate_model('test-latent-all', head="enc", sample_size=4000, verbose=0)
 
 # %% [markdown]
 # # Decoder Head
@@ -1234,7 +1248,7 @@ dc = DeepLatentCluster(
         "cluster": "OPTICS"
     })
 
-dc.evaluate_model('test-latent-all', head="ae", sample_size=3000)
+dc.evaluate_model('test-latent-all', head="ae", sample_size=3000, verbose=0)
 
 # %% [markdown]
 # ## GMM-AE
@@ -1252,7 +1266,7 @@ dc = DeepLatentCluster(
         "cluster": "GMM"
     })
 
-dc.evaluate_model('test-latent-all', head="ae", sample_size=4000)
+dc.evaluate_model('test-latent-all', head="ae", sample_size=4000, verbose=0)
 
 # %%
 %%time
@@ -1267,7 +1281,7 @@ dc = DeepLatentCluster(
         "cluster": "GMM"
     })
 
-dc.evaluate_model('test-latent-all', head="ae", sample_size=4000)
+dc.evaluate_model('test-latent-all', head="ae", sample_size=4000, verbose=0)
 
 # %% [markdown]
 # ## Kmeans-AE
@@ -1285,7 +1299,7 @@ dc = DeepLatentCluster(
         "cluster": "Kmeans"
     })
 
-dc.evaluate_model('test-latent-all', head="ae", sample_size=4000)
+dc.evaluate_model('test-latent-all', head="ae", sample_size=4000, verbose=0)
 
 # %%
 stop
@@ -1414,7 +1428,7 @@ for entity_count in [0, 5, 10, 15]:
             "entity_count": entity_count,
         })
     dc.make_model()
-    dc.train_model(verbose=0)
+    # dc.train_model(verbose=0)
     dc.evaluate_model(
             run_name,
             head='z',
@@ -1443,7 +1457,7 @@ for entity_count in [0, 5, 10, 15]:
             "noise_factor": 0.5,
         })
     dc.make_model()
-    dc.train_model(verbose=0)
+    # dc.train_model(verbose=0)
     dc.evaluate_model(
             run_name,
             head='z',
