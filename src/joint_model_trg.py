@@ -66,7 +66,6 @@ def cluster_acc(y_true, y_pred, y_pred_cluster):
     return c_loss
 
 # %%
-from tabnanny import verbose
 from sklearn.cluster import KMeans, DBSCAN, OPTICS, AgglomerativeClustering
 from sklearn import mixture
 from scipy.stats import multivariate_normal
@@ -87,10 +86,13 @@ def do_clustering(
     dbscan_eps = 1
     dbscan_min_samples = 5
     
+    min_cluster_size = 5
     if 'eps' in params:
         dbscan_eps = params['eps']
     if 'min_samples' in params:
         dbscan_min_samples = params['min_samples']
+    if 'min_cluster_size' in params:
+        min_cluster_size = params['min_cluster_size']
 
     if clustering == 'GMM':
         gmix = mixture.GaussianMixture(
@@ -120,7 +122,7 @@ def do_clustering(
     elif clustering == 'OPTICS':
         optics = OPTICS(
             min_samples=dbscan_min_samples, 
-            min_cluster_size=5,
+            min_cluster_size=min_cluster_size,
             metric='manhattan')
         y_pred = optics.fit_predict(z_state)
         centers = np.zeros((len(np.unique(y_pred))))
@@ -155,6 +157,11 @@ from pathlib import Path
 
 def write_results_page(clusters, new_clusters, save_dir, test_name, scores):
     
+    # pass strings to the template for formatting
+    str_scores = scores.copy()
+    for k in str_scores:
+        str_scores[k] = f"{str_scores[k]:.4f}"
+
     environment = Environment(loader=FileSystemLoader("templates/"))
     template = environment.get_template("index.jinja")
 
@@ -164,17 +171,14 @@ def write_results_page(clusters, new_clusters, save_dir, test_name, scores):
         "clusters": clusters,
         "new_clusters": new_clusters,
         "test_name": test_name,
-        "metrics": scores,
+        "metrics": str_scores,
     }
     with open(results_filename, mode="w", encoding="utf-8") as results:
         results.write(results_template.render(context))
         full_filename = Path(results_filename).absolute()
-        print (f'... wrote results  <a href="{full_filename}">{full_filename}</a>')
+        print (f'... wrote results to {full_filename}')
 
 # %%
-from ast import NamedExpr
-
-
 def show_wordcloud(
     i: int,
     freqs: np.ndarray,
@@ -269,6 +273,7 @@ class DeepLatentCluster():
             "emb_size": 768,
             "alpha1": 20,
             "alpha2": 1,
+            "head": 'enc',
             "ae_init_fn": VarianceScaling(
                 mode='fan_in',
                 scale=1. / 3.,
@@ -471,6 +476,7 @@ class DeepLatentCluster():
             p = make_q(y_pred, self.batch_size, alpha=self.config['alpha1'])
             q = make_q(z_enc, self.batch_size, alpha=self.config['alpha2'])
             latent_loss = tf.reduce_sum(tf.multiply(p, tf.math.log(p) - tf.math.log(q)))
+            # latent_loss = tf.reduce_sum(-(tf.multiply(p, tf.math.log(q))))
             return latent_loss
         return loss
 
@@ -599,6 +605,8 @@ class DeepLatentCluster():
         if load_dir is None:
             load_dir = self.save_dir
         else:
+            if 'ae_weights_file' in self.config:
+                load_dir = self.config['ae_weights_file']
             load_dir = f'./{self.config["base_dir"]}/{load_dir}'
 
         ae_weights_file  = os.path.join(load_dir, 'ae_weights.h5')
@@ -624,7 +632,7 @@ class DeepLatentCluster():
             self.x, self.y, self.mapping, self.strings = load_data(
                 0,
                 get_text=True,
-                verbose=verbose,
+                verbose=self.verbose,
                 train=False)
             self.output(f"Test Data Loaded {self.x.shape}")
 
@@ -652,7 +660,7 @@ class DeepLatentCluster():
             - the textual repr of each item
         """
         if head is None:
-            head = 'z'
+            head = self.config['head']
         self.output(f"Using [{head}] head for predictions")
         
         x_sample, y_sample, str_sample = self.get_sample(sample_size)
@@ -690,7 +698,10 @@ class DeepLatentCluster():
             clustering=self.config['cluster'],
             n_clusters=self.config['num_clusters'],
             z_state=z_sample,
-            params={'verbose': self.verbose})
+            params={
+                'verbose': self.verbose,
+                'min_cluster_size': self.config.get('min_cluster_size'),
+                })
         if self.config['cluster'] in ['DBSCAN', 'OPTICS']:
             self.config['num_clusters'] = len(c)
 
@@ -879,10 +890,10 @@ class DeepLatentCluster():
         print(f"Precision = {precision:.4f}")
         print(f"Recall = {recall:.4f}")
         scores = {
-            'f1': f"{f1:.4f}",
-            'acc': f"{acc:.4f}",
-            'precision': f"{precision:.4f}",
-            'recall': f"{recall:.4f}",
+            'f1': f1,
+            'acc': acc,
+            'precision': precision,
+            'recall': recall,
         }
         return scores
 
@@ -948,29 +959,22 @@ class DeepLatentCluster():
             scores,
         )
 
-    def do_evaluation(self, z_sample, y_sample, str_sample):
-
-        # cluster the latent space using requested algorithm
-        y_pred_sample, y_label = self.apply_cluster_algo(z_sample, y_sample)
-
-        # assign labels to the clusters
-        all_clusters, clusters = self.eval_cluster(y_pred_sample, y_sample, y_label, str_sample)
-
-        # overall scores
-        scores_agg = self.show_core_metrics(y_sample, y_pred_sample, all_clusters)
-
-        # cluster scores
-        cluster_list = self.score_clusters(clusters)
-
-        # output file
-        self.save_scores(cluster_list, scores_agg)
-
     @timer
-    def evaluate_model(self, load_dir: str, sample_size: int = 0, head: str=None, verbose: int = 1) -> None:
+    def evaluate_model(self,
+                    load_dir: str,
+                    sample_size: int = 0,
+                    head: str=None,
+                    verbose: int = 1,
+                    config: dict = None) -> None:
         """
         Run the model.
         """
         self.verbose = verbose
+        if config is not None:
+            self.config = {
+                **self.config,
+                **config,
+            }
 
         self.make_load_model(load_dir)
 
@@ -978,7 +982,7 @@ class DeepLatentCluster():
         # z is the latent space
         z_sample, y_sample, str_sample = self.predict(sample_size, head)
 
-        self.do_evaluation(z_sample, y_sample, str_sample)
+        return self.do_evaluation(z_sample, y_sample, str_sample)
   
     def do_evaluation(self, z_sample, y_sample, str_sample):
 
@@ -997,7 +1001,7 @@ class DeepLatentCluster():
         # output file
         self.save_scores(cluster_list, scores_agg)
 
-        scores = {**scores_agg, 'cluster F1': cluster_f1}
+        scores = {**scores_agg, 'cluster_f1': cluster_f1}
         
         return scores
 
@@ -1030,6 +1034,122 @@ def train_and_evaluate_model(self, eval_size, verbose=1):
 
 # %%
 tf.get_logger().setLevel('ERROR')
+
+# %%
+from collections import defaultdict
+
+def summarise_scores(scores: list[dict]) -> None:
+    """
+    summarise the scores.
+    """
+    groups = defaultdict(list)
+    results = {}
+    for s in scores:
+        groups[s['run_name']].append(s)
+        results[s['run_name']] = {
+                            'cluster_f1':0.0,
+                            'f1': 0.0,
+                            'precision': 0.0,
+                            'recall': 0.0,
+                            'n': 0}
+    # add up each group
+    for group, scores in groups.items():
+        for score in scores:
+            results[group]['cluster_f1'] += score['cluster_f1']
+            results[group]['f1'] += score['f1']
+            results[group]['precision'] += score['precision']
+            results[group]['recall'] += score['recall']
+            results[group]['n'] += 1
+    # average each group
+    for group, scores in groups.items():
+        results[group]['cluster_f1'] /= len(scores)
+        results[group]['f1'] /= len(scores)
+        results[group]['precision'] /= len(scores)
+        results[group]['recall'] /= len(scores)
+
+
+    # print results
+    print(
+        f"{'Run Name':<40} {'Runs':<10} {'F1 avg':<12} {'F1 Cluster':<12} "
+        f"{'F1 Global':<12} {'Precision':<12} {'Recall':<12}")
+    for run, s in results.items():
+        print(
+            f"{run:<40} {s['n']:<10}  {(s['f1']+s['cluster_f1'])/2:<12.4f} "
+            f"{s['cluster_f1']:<12.4f} {s['f1']:<12.4f}"
+            f"{s['precision']:<12.4f} {s['recall']:<12.4f}")
+
+# %% [markdown]
+# ## Grid Search Utils
+
+# %%
+def do_run(cfg, idx, n_runs):
+    run_name = (f"test-")
+    
+
+    # append all cfg to run_name
+    for k, v in cfg.items():
+        run_name += f"{k}={v}-"
+
+    print('-'*50)
+    print(f"{idx}/{n_runs}: {run_name}")
+    print('-'*50)
+    print(cfg)
+    dc = DeepLatentCluster(
+        run_name,
+        {
+            **cfg,
+        
+        })
+    dc.make_model()
+    dc.train_model(verbose=0)
+    score = dc.evaluate_model(
+        run_name,
+        sample_size=3000,
+        verbose=0)
+    score['run_name'] = run_name
+    return score
+    
+from collections import defaultdict
+
+def summarise_scores(scores: list[dict]) -> None:
+    """
+    summarise the scores.
+    """
+    groups = defaultdict(list)
+    results = {}
+    for s in scores:
+        groups[s['run_name']].append(s)
+        results[s['run_name']] = {
+                            'cluster_f1':0.0,
+                            'f1': 0.0,
+                            'precision': 0.0,
+                            'recall': 0.0,
+                            'n': 0}
+    # add up each group
+    for group, scores in groups.items():
+        for score in scores:
+            results[group]['cluster_f1'] += score['cluster_f1']
+            results[group]['f1'] += score['f1']
+            results[group]['precision'] += score['precision']
+            results[group]['recall'] += score['recall']
+            results[group]['n'] += 1
+    # average each group
+    for group, scores in groups.items():
+        results[group]['cluster_f1'] /= len(scores)
+        results[group]['f1'] /= len(scores)
+        results[group]['precision'] /= len(scores)
+        results[group]['recall'] /= len(scores)
+
+
+    # print results
+    print(
+        f"{'Run Name':<40} {'Runs':<10} {'F1 avg':<12} {'F1 Cluster':<12} "
+        f"{'F1 Global':<12} {'Precision':<12} {'Recall':<12}")
+    for run, s in results.items():
+        print(
+            f"{run:<40} {s['n']:<10}  {(s['f1']+s['cluster_f1'])/2:<12.4f} "
+            f"{s['cluster_f1']:<12.4f} {s['f1']:<12.4f}"
+            f"{s['precision']:<12.4f} {s['recall']:<12.4f}")
 
 # %%
 stop
@@ -1324,6 +1444,22 @@ dc = DeepLatentCluster(
 dc.benchmark_model(sample_size=4000, verbose=0)
 
 # %%
+%%time
+
+dc = None
+dc = DeepLatentCluster(
+    'test-latent-10k-Benchmark',
+    {
+        'train_size':0,
+        'reconstr_weight':1.0,
+        'latent_weight':1e-5,
+        "cluster": "OPTICS"
+    })
+# dc.make_model()
+# dc.train_model()
+dc.benchmark_model(sample_size=2000, verbose=0)
+
+# %%
 stop
 
 # %%
@@ -1467,12 +1603,18 @@ for entity_count in [0, 5, 10, 15]:
 # %% [markdown]
 # # Grid Search Clustering
 
+# %%
+
+
 # %% [markdown]
 # ## with noise
 
 # %%
 heads = ["z", "ae", "enc"]
 clusterers = {"Kmeans": 4000, "GMM": 4000, "OPTICS":3000, "agg":4000}
+repeats = 3
+
+scores = []
 
 for head in heads:
     for clusterer in clusterers:
@@ -1481,21 +1623,31 @@ for head in heads:
         print(f"{run_name}")
         print('-'*50)
         
-        dc = None
-        dc = DeepLatentCluster(
-            run_name,
-            {
-                'train_size':0,
-                'reconstr_weight':1.0,
-                'latent_weight':1e-5,
-                "cluster": clusterer,
-            })
+        for r in range(repeats):
+            print(f"Run {r+1}")
+            dc = None
+            dc = DeepLatentCluster(
+                run_name,
+                {
+                    'train_size':0,
+                    'reconstr_weight':1.0,
+                    'latent_weight':1e-5,
+                    "cluster": clusterer,
+                })
+            
+            score = dc.evaluate_model(
+                                f'test-latent-noise-15-ents',
+                                head=head,
+                                sample_size=clusterers[clusterer],
+                                verbose=0)
+
+            score['run_name'] = run_name
+            scores.append(score)
         
-        dc.evaluate_model(
-                f'test-latent-noise-15-ents',
-                head=head,
-                sample_size=clusterers[clusterer],
-                verbose=0)
+
+
+# %%
+summarise_scores(scores)
 
 # %% [markdown]
 # ## Evaluate all without noise
@@ -1504,9 +1656,57 @@ for head in heads:
 heads = ["z", "ae", "enc"]
 clusterers = {"Kmeans": 4000, "GMM": 4000, "OPTICS":3000, "agg":4000}
 
+runs = 3
+scores = []
 for head in heads:
     for clusterer in clusterers:
-        run_name = f'test-latent-noise-15-ents-{head}-{clusterer}'
+        for r in range(runs):
+            print(f"Run {r+1}")
+            run_name = f'test-latent-noise-15-ents-{head}-{clusterer}'
+            
+            print('-'*50)
+            print(f"{run_name}")
+            print('-'*50)
+            
+            dc = None
+            dc = DeepLatentCluster(
+                run_name,
+                {
+                    'train_size':0,
+                    'reconstr_weight':1.0,
+                    'latent_weight':1e-5,
+                    "cluster": clusterer,
+                })
+            
+            score = dc.evaluate_model(
+                        f'test-latent-noise-15-ents',
+                        head=head,
+                        sample_size=clusterers[clusterer],
+                        verbose=0)
+            score['run_name'] = run_name
+            scores.append(score)
+
+# %%
+summarise_scores(scores)
+
+
+# %% [markdown]
+# # Radius BMs
+
+# %%
+# assert False, "One time run"
+for radius in [8, 10]:
+    load_data(0, oversample=False, radius=radius, verbose=0)
+
+# %% [markdown]
+# ## AE-head different radii
+
+# %%
+scores = []
+num_runs = 3
+for radius in [0,2,4,6, 8, 10]:
+    for r in range(num_runs):
+        run_name = f'test-latent-noise-15-ents-r{radius}-Kmeans'
         print('-'*50)
         print(f"{run_name}")
         print('-'*50)
@@ -1518,78 +1718,415 @@ for head in heads:
                 'train_size':0,
                 'reconstr_weight':1.0,
                 'latent_weight':1e-5,
-                "cluster": clusterer,
+                "cluster": "Kmeans",
+                "radius": radius,
             })
+        # dc.make_model()
+        # dc.train_model(verbose=0)
+        score = dc.evaluate_model(
+                            run_name,
+                            head="ae",
+                            sample_size=4000,
+                            verbose=0)
+        score['run_name'] = run_name
+        scores.append(score)
         
-        dc.evaluate_model(
-                f'test-latent-noise-15-ents',
-                head=head,
-                sample_size=clusterers[clusterer],
-                verbose=0)
 
-# %% [markdown]
-# # Radius BMs
 
 # %%
-assert False, "One time run"
-for radius in [0,1,2,4,6]:
-    load_data(0, oversample=False, radius=radius, verbose=0)
+summarise_scores(scores)
 
 # %% [markdown]
 # ## Z-head different radii
 
 # %%
-for radius in [0,1,2,4,6]:
-    run_name = f'test-latent-noise-15-ents-r{radius}-Kmeans'
-    print('-'*50)
-    print(f"{run_name}")
-    print('-'*50)
-    
-    dc = None
-    dc = DeepLatentCluster(
-        run_name,
-        {
-            'train_size':0,
-            'reconstr_weight':1.0,
-            'latent_weight':1e-5,
-            "cluster": "Kmeans",
-            "radius": radius,
-        })
-    # dc.make_model()
-    # dc.train_model(verbose=0)
-    dc.evaluate_model(
+scores = []
+num_runs = 3
+for radius in [0,2,4,6, 8, 10]:
+    for r in range(num_runs):
+        run_name = f'test-latent-noise-15-ents-r{radius}-Kmeans'
+        print('-'*50)
+        print(f"{run_name}")
+        print('-'*50)
+        
+        dc = None
+        dc = DeepLatentCluster(
             run_name,
-            head="z",
-            sample_size=4000,
-            verbose=0)
+            {
+                'train_size':0,
+                'reconstr_weight':1.0,
+                'latent_weight':1e-5,
+                "cluster": "Kmeans",
+                "radius": radius,
+            })
+        # dc.make_model()
+        # dc.train_model(verbose=0)
+        score = dc.evaluate_model(
+                            run_name,
+                            head="z",
+                            sample_size=4000,
+                            verbose=0)
+        score['run_name'] = run_name
+        scores.append(score)
+        
+summarise_scores(scores)
 
 # %% [markdown]
 # ## Encoder head, different radii
 
 # %%
+scores = []
+num_runs = 3
+for radius in [0, 2, 4, 6, 8, 10]:
+    for r in range(num_runs):
+        run_name = f'test-latent-noise-15-ents-r{radius}-Kmeans-enc'
+        print('-'*50)
+        print(f"{run_name}")
+        print('-'*50)
+        
+        dc = None
+        dc = DeepLatentCluster(
+            run_name,
+            {
+                'train_size':0,
+                'reconstr_weight':1.0,
+                'latent_weight':1e-5,
+                "cluster": "Kmeans",
+                "radius": radius,
+            })
+        dc.make_model()
+        dc.train_model(verbose=0)
+        score = dc.evaluate_model(
+                            run_name,
+                            head="enc",
+                            sample_size=4000,
+                            verbose=0)
+        score['run_name'] = run_name
+        scores.append(score)
 
-for radius in [0,1,2,4,6]:
-    run_name = f'test-latent-noise-15-ents-r{radius}-Kmeans-enc'
+
+# %%
+summarise_scores(scores)
+
+# %% [markdown]
+# ## Data Balance
+
+# %%
+dc = None
+dc = DeepLatentCluster(
+    'test-latent-all',
+    {
+        'train_size':0,
+        'entity_count': 15,
+    })
+dc.make_data(oversample=True)
+
+# %%
+from collections import defaultdict
+
+cats = defaultdict(lambda: "Unknown",
+{0: 'PERSON', 1: 'NORP', 2: 'ORG', 3: 'GPE', 4: 'LOC', 5: 'PRODUCT', 6: 'EVENT', 7: 'WORK_OF_ART',
+        8: 'DATE', 9: 'TIME', 10: 'PERCENT', 11: 'MONEY', 12: 'QUANTITY', 13: 'CARDINAL', 14: 'FAC'})
+pre = [[2, 2080],
+       [3,  142],
+       [4, 1950],
+       [5, 2664],
+       [6,  114],
+       [7,   36],
+       [8,   55],
+       [9,   17],
+       [12, 1659],
+       [13,  143],
+       [14,  151],
+       [15,  111],
+       [16,  139],
+       [18,   62],
+       [19,   95]]
+sort_pre = sorted(pre, key=lambda x: -x[1])
+# plot catplot
+plt.xticks(rotation=90, ha='right')
+plt.title("Class Distribution")
+plt.bar([cats[x[0]] for x in sort_pre], [x[1] for x in sort_pre])
+plt.show()
+
+
+# %% [markdown]
+# ## Loss Weights
+
+# %%
+scores = []
+num_runs = 1
+for i, l_weight in enumerate([1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1]):
+    for j, r_weight in enumerate([0,0.25,0.5,0.75, 1.0]):
+        for r in range(num_runs):
+            run_name = f'test-latent-15-ents-lw{l_weight}-rw{r_weight}-Kmeans'
+            print('-'*50)
+            print(f"{(i)*8 + j}: {run_name}")
+            print('-'*50)
+            
+            print({
+                    'train_size':0,
+                    'reconstr_weight':r_weight,
+                    'latent_weight':l_weight,
+                    "cluster": "Kmeans",
+                    "radius": 6,
+                })
+            dc = None
+            dc = DeepLatentCluster(
+                run_name,
+                {
+                    'train_size':0,
+                    'reconstr_weight':r_weight,
+                    'latent_weight':l_weight,
+                    "cluster": "Kmeans",
+                    "radius": 6,
+                })
+            dc.make_model()
+            dc.train_model(verbose=0)
+            score = dc.evaluate_model(
+                                run_name,
+                                head="ae",
+                                sample_size=2000,
+                                verbose=0)
+            score['run_name'] = run_name
+            scores.append(score)
+            
+    summarise_scores(scores)
+
+# %%
+#%history -g -f jm_trg.py
+
+# %%
+from grid_search import grid_search
+
+scores = []
+num_runs = 1
+config = {
+    'train_size': [0],
+    "radius": [6],
+    'latent_weight': [0.05, 0.1, 0.2, 0.5, 1.0],
+    'reconstr_weight': [0.1, 0.25, 0.5, 0.75, 1.0],
+    'head': ['enc'],
+}
+
+
+def do_run(cfg, idx):
+    run_name = (f"test-latent-15-ents-lw{cfg['latent_weight']}-"
+               f"rw{cfg['reconstr_weight']}-"
+               f"{cfg['head']}-Kmeans")
+    print('-'*50)
+    print(f"{idx}: {run_name}")
+    print('-'*50)
+    print(cfg)
+    dc = DeepLatentCluster(
+        run_name,
+        {
+            **cfg,
+        })
+    dc.make_model()
+    dc.train_model(verbose=0)
+    score = dc.evaluate_model(
+        run_name,
+        sample_size=2000,
+        verbose=0)
+    score['run_name'] = run_name
+    scores.append(score)
+
+grid_search(config, do_run)
+
+
+
+summarise_scores(scores)
+
+
+# %% [markdown]
+# # All together
+
+# %%
+from grid_search import grid_search
+
+# %%
+from grid_search import grid_search
+
+scores = []
+num_runs = 1
+config = {
+    'train_size': [0],
+    "radius": [6],
+    'latent_weight': [0.9, 1.0, 1.1],
+    'reconstr_weight': [0.65,0.75,0.85],
+    'head': ['enc'],
+    'cluster': ['OPTICS'],
+    'noise_factor': [0.5]
+}
+
+grid_search(config, do_run)
+
+# %%
+summarise_scores(scores)
+
+# %% [markdown]
+# # Noise over best
+
+# %%
+from grid_search import grid_search
+
+scores = []
+num_runs = 1
+config = {
+    'train_size': [0],
+    "radius": [6],
+    'latent_weight': [0.9],
+    'reconstr_weight': [0.75],
+    'head': ['ae'],
+    'cluster': ['OPTICS'],
+    'noise_factor': [0.0, 0.2, 0.4, 0.5, 0.6, 0.8, 1.0]
+}
+
+grid_search(config, do_run)
+
+# %%
+summarise_scores(scores)
+
+# %% [markdown]
+# ## Min cluster size for OPTICS
+
+# %%
+trained = False
+ae_file = None
+scores=[]
+for min_cluster_size in [5, 10, 15, 20]:
+    run_name = f'test-optics-mcs-{min_cluster_size}'
     print('-'*50)
     print(f"{run_name}")
     print('-'*50)
-    
+
     dc = None
     dc = DeepLatentCluster(
         run_name,
         {
             'train_size':0,
-            'reconstr_weight':1.0,
-            'latent_weight':1e-5,
-            "cluster": "Kmeans",
-            "radius": radius,
+            'reconstr_weight':0.75,
+            'latent_weight':0.9,
+            "cluster": 'OPTICS',
+            "entity_count": 15,
+            "noise_factor": 0.6,
+            "head": "ae",
+            "radius": 6,
+            "alpha1": 80,
         })
     dc.make_model()
-    dc.train_model(verbose=0)
-    dc.evaluate_model(
+    
+    if not trained:
+        dc.train_model(verbose=0)
+        trained = True
+        ae_file = run_name
+
+    score = dc.evaluate_model(
             run_name,
-            head="enc",
-            sample_size=4000,
-            verbose=0)
+            head='z',
+            sample_size=3000,
+            verbose=0,
+            config={
+                'min_cluster_size': min_cluster_size,
+                'ae_weights_file': ae_file,
+                })
+    score['run_name'] = run_name
+    scores.append(score)
+
+summarise_scores(scores)
+
+# %%
+run_name = f'test-kmeans-high-alpha'
+print('-'*50)
+print(f"{run_name}")
+print('-'*50)
+
+dc = None
+dc = DeepLatentCluster(
+    run_name,
+    {
+        'train_size':0,
+        'reconstr_weight':0.75,
+        'latent_weight':0.9,
+        "cluster": 'Kmeans',
+        "entity_count": 15,
+        "noise_factor": 0.6,
+        "head": "ae",
+        "radius": 6,
+        "alpha1": 80,
+    })
+dc.make_model()
+
+# dc.train_model(verbose=0)
+
+score = dc.evaluate_model(
+        run_name,
+        head='z',
+        sample_size=4000,
+        verbose=0,
+        config=None,
+        )
+score['run_name'] = run_name
+summarise_scores([score])
+
+
+# %%
+%tb plain
+
+# %%
+run_name = f'test-kmeans-high-alpha-enc'
+print('-'*50)
+print(f"{run_name}")
+print('-'*50)
+
+dc = None
+dc = DeepLatentCluster(
+    run_name,
+    {
+        'train_size':0,
+        'reconstr_weight':0.75,
+        'latent_weight':1.0,
+        "cluster": 'Kmeans',
+        "entity_count": 15,
+        "noise_factor": 0.6,
+        "head": "enc",
+        "radius": 6,
+        "alpha1": 80,
+    })
+dc.make_model()
+
+dc.train_model(verbose=0)
+
+score = dc.evaluate_model(
+        run_name,
+        head='enc',
+        sample_size=2000,
+        verbose=0,
+        config=None,
+        )
+score['run_name'] = run_name
+summarise_scores([score])
+
+
+# %%
+from grid_search import grid_search
+
+num_runs = 1
+config = {
+    'train_size': [0],
+    "radius": [6],
+    'latent_weight': [1.0],
+    'reconstr_weight': [0.75],
+    'head': ['enc'],
+    'cluster': ['Kmeans'],
+    'noise_factor': [0.6],
+    "entity_count": [15],
+    'alpha1': [20, 40, 60, 80, 100]
+}
+
+scores = grid_search(config, do_run)
+
+summarise_scores(scores)
 
 
