@@ -470,7 +470,7 @@ class DeepLatentCluster():
         def loss(y, y_pred):
             p = make_q(y_pred, self.batch_size, alpha=self.config['alpha1'])
             q = make_q(z_enc, self.batch_size, alpha=self.config['alpha2'])
-            latent_loss = tf.reduce_sum(-(tf.multiply(p, tf.math.log(q))))
+            latent_loss = tf.reduce_sum(tf.multiply(p, tf.math.log(p) - tf.math.log(q)))
             return latent_loss
         return loss
 
