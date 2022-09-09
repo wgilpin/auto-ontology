@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+import fractions
 import os
 import math
 import glob
@@ -37,6 +39,23 @@ ENTITY_FILTER_LIST = ['GPE', 'PERSON', 'ORG', 'DATE', 'NORP',
                       'TIME', 'PERCENT', 'LOC', 'QUANTITY', 'MONEY', 'FAC', 'CARDINAL',
                       'EVENT', 'PRODUCT', 'WORK_OF_ART', 'ORDINAL', 'LANGUAGE']
 
+
+@dataclass
+class Cluster:
+    """
+    Describes a single cluster of entities.
+    """
+    freqs: dict
+    freqs_unknown: dict
+    class_freqs: dict
+    frac: float
+    n: int
+    label: str
+    entity_id: int
+    clus_no: int
+    name: str
+
+ClusterList = dict[str: Cluster]
 
 def write_results_page(clusters, new_clusters, save_dir, test_name, scores):
     """
@@ -196,6 +215,7 @@ class DeepLatentCluster():
     Representations. 2018 IEEE International Conference on Big Data (Big Data),
     3747–3755.
     """
+
     def __init__(
         self,
         run_name: str,
@@ -746,18 +766,16 @@ class DeepLatentCluster():
 
         return f1, precision, recall
 
-    def eval_cluster(self, y_pred_sample, y_sample, y_label, str_sample):
+    def rearrange_clusters(
+                        self,
+                        sample,
+                        y_pred_sample,
+                        do_rearrange:bool=True
+                        ) -> tuple[DataFrame, ClusterList]:
         """
-        show wordclouds for each cluster
+        Rearrange the clusters so that the most common label is in the
+        eponymoous cluster
         """
-        self.output("CLUSTERS")
-
-        sample = DataFrame({
-            'text': str_sample,
-            'y_true': y_sample,
-            'y_pred': y_pred_sample,
-            'y_label': y_label, })
-
         # placeholder for revised predictions
         sample['y_pred_new'] = 0
 
@@ -767,8 +785,8 @@ class DeepLatentCluster():
         y_tru_counts = y_tru_per_clus.sum()
         y_tru_frac_by_clus = y_tru_per_clus / y_tru_counts
 
+        clusters: ClusterList = {}
 
-        clusters = {}
         for clus_no in np.unique(y_pred_sample):
             if clus_no < 0:
                 continue
@@ -782,32 +800,36 @@ class DeepLatentCluster():
             unknown_cluster = cluster[cluster['y_true'] == 0]
             freqs_unknown = self.get_freqs(unknown_cluster['text'].values)
             class_freqs, _ = freqs_descending(cluster, 'y_true')
-            entry = {
-                'freqs': freqs,
-                'freqs_unknown': freqs_unknown,
-                'class_freqs': class_freqs,
-                'frac': frac,
-                'n': len(cluster),
-                'label': prob_lbl,
-                'entity_id': prob_ent,
-                'clus_no': clus_no,
-            }
+            entry = Cluster(
+                freqs=freqs,
+                freqs_unknown=freqs_unknown,
+                class_freqs=class_freqs,
+                frac = frac,
+                n = len(cluster),
+                label = prob_lbl,
+                entity_id = prob_ent,
+                clus_no = clus_no,
+                name = prob_lbl)
 
-            # filling in the dict {name: entry}
-            # where the best PERSON entry is eponymous and less likely entries
-            # are named "UNK-PERSON-X" for cluster X
-            cluster_name = prob_lbl
-            unk_cluster_name = f"UNK-{prob_lbl}-{clus_no}"
+            if do_rearrange:
+                # filling in the dict {name: entry}
+                # where the best PERSON entry is eponymous and less likely entries
+                # are named "UNK-PERSON-X" for cluster X
+                cluster_name = prob_lbl
+                unk_cluster_name = f"UNK-{prob_lbl}-{clus_no}"
 
-            if prob_lbl == 'UNKNOWN':
-                cluster_name = unk_cluster_name
-            elif prob_lbl in clusters:
-                if y_tru_frac_by_clus[clus_no][prob_ent] > clusters[prob_lbl]['frac']:
-                    # we found a better cluster for this label
-                    clusters[unk_cluster_name] = clusters[prob_lbl]
-                else:
-                    # this cluster is worse than this one, so it's unknown
+                if prob_lbl == 'UNKNOWN':
                     cluster_name = unk_cluster_name
+                elif prob_lbl in clusters:
+                    if frac > clusters[prob_lbl].frac:
+                        # we found a better cluster for this label
+                        clusters[unk_cluster_name] = clusters[prob_lbl]
+                    else:
+                        # this cluster is worse than this one, so it's unknown
+                        cluster_name = unk_cluster_name
+            else:
+                cluster_name = f"c-{prob_lbl}-{clus_no}"
+
             clusters[cluster_name] = entry
 
             # write the cluster label back into the sample
@@ -816,13 +838,36 @@ class DeepLatentCluster():
                 (sample['y_true'] == prob_ent),
                 'y_pred_new'] = prob_ent
 
+        return sample, clusters
+
+    def eval_cluster(self,
+                    y_pred_sample,
+                    y_sample,
+                    y_label,
+                    str_sample,
+                    rearrange: bool=True):
+        """
+        show wordclouds for each cluster
+        """
+        self.output("CLUSTERS")
+
+        raw_sample = DataFrame({
+            'text': str_sample,
+            'y_true': y_sample,
+            'y_pred': y_pred_sample,
+            'y_label': y_label,
+        })
+
+        sample, clusters = self.rearrange_clusters(
+                                        raw_sample, y_pred_sample, rearrange)
+
         # confusion
         f1_list = []
         size_list = []
+        cluster_scores = {}
         for cluster_name, ce in clusters.items():
-            c_no = ce['clus_no']
-            c = sample[sample.y_pred == c_no]
-            c_ent = ce['entity_id']
+            c = sample[sample.y_pred == ce.clus_no]
+            c_ent = ce.entity_id
 
             # the right entity class in the right cluster
             TP = c[
@@ -847,28 +892,25 @@ class DeepLatentCluster():
 
             f1, prec, rec = self.calc_metrics(TP, FP, FN)
 
-            clusters[cluster_name]['F1'] = f1
-            clusters[cluster_name]['precision'] = prec
-            clusters[cluster_name]['recall'] = rec
-            clusters[cluster_name]['TP'] = TP
-            clusters[cluster_name]['FP'] = FP
-            clusters[cluster_name]['FN'] = FN
+            cluster_scores[cluster_name] = {
+                'F1': f1,
+                'precision': prec,
+                'recall': rec,
+                'TP': TP,
+                'FP': FP,
+                'FN': FN,
+            }
 
             if cluster_name[0:3] == 'UNK':
                 f1_list.append(f1)
-                size_list.append(ce['n']/sample.shape[0])
+                size_list.append(ce.n/sample.shape[0])
 
-            self.output(f"#{cluster_name}:{c_no} size:{len(c)} "
+            self.output(f"#{cluster_name}:{ce.clus_no} size:{len(c)} "
                         f"prec:{prec:.4f} rec:{rec:.4f} f1:{f1:.4f}")
 
         # full cluster
         f1 = np.dot(f1_list, size_list)
         print(f"\nF1 by Known Clusters: {f1:.4f}")
-
-        # print(classification_report(
-        #     sample['y_true'],
-        #     sample['y_pred_new'],
-        #     labels=[l for k,l in self.mapping.items()] ))
 
         return sample, clusters, f1
 
@@ -896,10 +938,10 @@ class DeepLatentCluster():
         print(f"Precision = {precision:.4f}")
         print(f"Recall = {recall:.4f}")
         scores = {
-            'f1': f"{f1:.4f}",
-            'acc': f"{acc:.4f}",
-            'precision': f"{precision:.4f}",
-            'recall': f"{recall:.4f}",
+            'f1': f1,
+            'acc': acc,
+            'precision': precision,
+            'recall': recall,
         }
         return scores
 
@@ -907,45 +949,42 @@ class DeepLatentCluster():
         """
         score the clusters found
         """
-        cluster_list = [{
-            **clusters[c],
-            'name': c,
-            'idx': idx} for idx, c in enumerate(clusters)]
-        cluster_list = sorted(cluster_list, key=lambda x: -x['frac'])
+        cluster_list = sorted(clusters.values(), key=lambda x: -x.frac)
 
         # show unknown clusters first
         cluster_list = sorted(
             cluster_list,
-            key=lambda x: int(x['name'][0:3] != "UNK"))
+            key=lambda x: int(x.name[0:3] != "UNK"))
 
         # delete old wordcloud files
         for f in glob.glob(f"{self.save_dir}/wordcloud*.png"):
             os.remove(f)
+
         for cluster in cluster_list:
             save_file = os.path.join(self.save_dir,
-                                     f"wordcloud-{cluster['name']}.png")
+                                     f"wordcloud-{cluster.name}.png")
             show_wordcloud(
-                cluster['freqs'],
-                cluster['name'],
+                cluster.freqs,
+                cluster.name,
                 save_file,
                 save_only=True)
 
             # the top 3 entity classes in this cluster
             top_entities = []
-            for (entity, count) in cluster['class_freqs'][0:3]:
+            for (entity, count) in cluster.class_freqs[0:3]:
                 top_entities += [
                     {'class': self.mapping[entity],
                      'count':count}]
-            cluster['classes'] = top_entities
+            cluster.classes = top_entities
 
         # save clusters of NER unknowns only
         for cluster in cluster_list:
             save_file = os.path.join(self.save_dir,
-                                     f"wordcloud-{cluster['name']}-new.png")
-            if len(cluster['freqs_unknown']) > 0:
+                                     f"wordcloud-{cluster.name}-new.png")
+            if len(cluster.freqs_unknown) > 0:
                 show_wordcloud(
-                    cluster['freqs_unknown'],
-                    cluster['name'],
+                    cluster.freqs_unknown,
+                    cluster.name,
                     save_file,
                     save_only=True)
 
@@ -955,8 +994,8 @@ class DeepLatentCluster():
         """
         save the scores to file
         """
-        new_clusters = [c for c in cluster_list if len(c['freqs_unknown']) > 4]
-        big_clusters = [c for c in cluster_list if len(c['freqs']) > 5]
+        new_clusters = [c for c in cluster_list if len(c.freqs_unknown) > 4]
+        big_clusters = [c for c in cluster_list if len(c.freqs) > 5]
         write_results_page(
             big_clusters,
             new_clusters,
@@ -1014,7 +1053,7 @@ class DeepLatentCluster():
 
     def benchmark_model(self, sample_size: int = 0, verbose: int = 1) -> None:
         """
-        Run the model.
+        Run the clustering on sample data without runnin the model.
         """
         self.verbose = verbose
 
@@ -1022,6 +1061,36 @@ class DeepLatentCluster():
         x_sample, y_sample, str_sample = self.get_sample(sample_size)
 
         self.do_evaluation(x_sample, y_sample, str_sample)
+
+    def random_benchmark(self, sample_size: int = 0, verbose: int = 1) -> None:
+        """
+        Benchmark a sample with cluster allocation from cluster algorithm only
+        """
+        self.verbose = verbose
+
+        # predict the requested sample size
+        x_sample, y_sample, str_sample = self.get_sample(sample_size)
+
+        # cluster the latent space using requested algorithm
+        y_pred_sample, y_label = self.apply_cluster_algo(x_sample, y_sample)
+
+        # assign labels to the clusters
+        all_clusters, clusters, cluster_f1 = self.eval_cluster(
+            y_pred_sample, y_sample, y_label, str_sample, rearrange=False)
+
+        # overall scores
+        scores_agg = self.show_core_metrics(
+            y_sample, y_pred_sample, all_clusters)
+
+        # cluster scores
+        cluster_list = self.score_clusters(clusters)
+
+        # output file
+        self.save_scores(cluster_list, scores_agg)
+
+        scores = {**scores_agg, 'cluster F1': cluster_f1}
+
+        return scores
 
 
 def train_and_evaluate_model(self, eval_size, verbose=1):
