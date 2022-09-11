@@ -31,12 +31,20 @@ def acc(y_true, y_pred):
     ind = linear_assignment(w.max() - w)
     return sum([w[i, j] for i, j in ind]) * 1.0 / y_pred.size
 
-def plot_confusion(y, y_pred, mapping, save_dir: str=None, size: int=8, details: bool=True):
+def plot_confusion(
+        y,
+        y_pred,
+        mapping,
+        save_dir: str,
+        size: int=8,
+        details: bool=True,
+        new_labels: dict = {}):
 
     sns.set(font_scale=3)
     confusion_matrix = sklearn.metrics.confusion_matrix(y, y_pred)
     entity_label_tups = [(k,v) for k,v in mapping.items()]
     entity_labels = [v for v,v in sorted(entity_label_tups, key=lambda tup: tup[0])]
+    new_ent_labels = [v for _, v in sorted(new_labels.items())]
 
     # re-order confusion matrix into a diagonal
 
@@ -53,8 +61,8 @@ def plot_confusion(y, y_pred, mapping, save_dir: str=None, size: int=8, details:
         cmap=sns.color_palette("crest", as_cmap=True),
         cbar=False,
         annot_kws={"size": 20},
-        xticklabels=entity_labels,
         yticklabels=entity_labels,
+        xticklabels=new_ent_labels,
         )
     plt.title("Confusion matrix\n", fontsize=20)
     plt.ylabel('True label', fontsize=20)
