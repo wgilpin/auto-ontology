@@ -132,7 +132,7 @@ def summarise_scores(scores: list[dict]) -> None:
     # add up each group
     for group, scores in groups.items():
         for score in scores:
-            results[group]['cluster_f1'] += score['cluster_f1']
+            results[group]['cluster_f1'] += score['cluster F1']
             results[group]['f1'] += score['f1']
             results[group]['precision'] += score['precision']
             results[group]['recall'] += score['recall']
@@ -431,6 +431,9 @@ dc.evaluate_model('test-latent-all', head="ae", sample_size=4000, verbose=0)
 # %%
 stop
 
+# %%
+%history -f history.py
+
 # %% [markdown]
 # # Benchmarks
 
@@ -443,8 +446,6 @@ dc = DeepLatentCluster(
     'benchmark-10k-with-rearrange',
     {
         'train_size':0,
-        'reconstr_weight':1.0,
-        'latent_weight':1e-5,
         "cluster": "Kmeans"
     })
 # dc.make_model()
@@ -452,8 +453,7 @@ dc = DeepLatentCluster(
 dc.benchmark_model(sample_size=4000, verbose=0)
 
 # %%
-%tb plain
-
+dc.visualise_umap(dc.x_sample, dc.y_sample, to_dir=False)
 
 # %%
 %%time
@@ -735,7 +735,7 @@ scores = []
 num_runs = 3
 for radius in [0,2,4,6, 8, 10]:
     for r in range(num_runs):
-        run_name = f'test-latent-noise-15-ents-r{radius}-Kmeans'
+        run_name = f'test-latent-noise-15-ae-r{radius}-Kmeans'
         print('-'*50)
         print(f"{run_name}")
         print('-'*50)
@@ -750,8 +750,8 @@ for radius in [0,2,4,6, 8, 10]:
                 "cluster": "Kmeans",
                 "radius": radius,
             })
-        # dc.make_model()
-        # dc.train_model(verbose=0)
+        dc.make_model()
+        dc.train_model(verbose=0)
         score = dc.evaluate_model(
                             run_name,
                             head="ae",
@@ -933,33 +933,72 @@ num_runs = 1
 config = {
     'train_size': [0],
     "radius": [6],
-    'latent_weight': [0.05, 0.1, 0.2, 0.5, 1.0],
-    'reconstr_weight': [0.1, 0.25, 0.5, 0.75, 1.0],
-    'head': ['enc'],
+    'latent_weight': [0.4, 0.5, 1.0],
+    'reconstr_weight': [0.8, 0.9, 1.0],
+    'head': ['z'],
 }
 
 
-def do_run(cfg, idx):
+# %%
+
+def do_run(cfg, idx, total):
     run_name = (f"test-latent-15-ents-lw{cfg['latent_weight']}-"
                f"rw{cfg['reconstr_weight']}-"
                f"{cfg['head']}-Kmeans")
     print('-'*50)
-    print(f"{idx}: {run_name}")
+    print(f"{idx}/{total}: {run_name}")
     print('-'*50)
     print(cfg)
-    dc = DeepLatentCluster(
-        run_name,
-        {
-            **cfg,
-        })
-    dc.make_model()
-    dc.train_model(verbose=0)
+    dc = DeepLatentCluster(run_name, {**cfg})
+    
     score = dc.evaluate_model(
         run_name,
         sample_size=2000,
         verbose=0)
     score['run_name'] = run_name
     scores.append(score)
+
+grid_search(config, do_run, 5)
+
+summarise_scores(scores)
+
+
+# %%
+from grid_search import grid_search
+
+scores = []
+num_runs = 1
+config = {
+    'train_size': [0],
+    "radius": [6],
+    'latent_weight': [0.05, 0.1, 0.2, 0.5, 1.0],
+    'reconstr_weight': [0.1, 0.25, 0.5, 0.75, 1.0],
+    'head': ['enc'],
+}
+
+
+def do_run(cfg, idx, n_runs):
+    for n in range(n_runs):
+        run_name = (f"test-latent-15-ents-lw{cfg['latent_weight']}-"
+                f"rw{cfg['reconstr_weight']}-"
+                f"{cfg['head']}-Kmeans")
+        print('-'*50)
+        print(f"{idx}: {run_name}")
+        print('-'*50)
+        print(cfg)
+        dc = DeepLatentCluster(
+            run_name,
+            {
+                **cfg,
+            })
+        # dc.make_model(1)
+        # dc.train_model(verbose=0)
+        score = dc.evaluate_model(
+            run_name,
+            sample_size=2000,
+            verbose=0)
+        score['run_name'] = run_name
+        scores.append(score)
 
 grid_search(config, do_run)
 
@@ -970,9 +1009,6 @@ summarise_scores(scores)
 
 # %% [markdown]
 # # All together
-
-# %%
-from grid_search import grid_search
 
 # %%
 from grid_search import grid_search
@@ -1094,7 +1130,6 @@ score = dc.evaluate_model(
         head='z',
         sample_size=4000,
         verbose=0,
-        config=None,
         )
 score['run_name'] = run_name
 summarise_scores([score])
@@ -1132,7 +1167,6 @@ score = dc.evaluate_model(
         head='enc',
         sample_size=2000,
         verbose=0,
-        config=None,
         )
 score['run_name'] = run_name
 summarise_scores([score])
@@ -1157,5 +1191,8 @@ config = {
 scores = grid_search(config, do_run)
 
 summarise_scores(scores)
+
+# %%
+
 
 
