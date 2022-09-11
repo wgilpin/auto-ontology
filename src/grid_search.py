@@ -1,7 +1,7 @@
 import math
 import itertools as it
 
-def grid_search(config: dict, fn: callable, n: int = 1) -> None:
+def grid_search(config: dict, fn: callable, n: int = 1) -> list[dict]:
     """
     Grid search for hyperparameter tuning.
     :param config: dict, hyperparameter configuration
