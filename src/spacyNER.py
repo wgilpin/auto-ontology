@@ -2,7 +2,7 @@
 # Perform standard imports
 import os
 import pickle
-from typing import Tuple
+from typing import Optional, Tuple
 import pandas as pd
 import spacy
 import numpy as np
@@ -88,7 +88,7 @@ def get_spacy_NER_data(length: int = 10) -> list:
 def training_data_per_entity_spacy(
         length: int = 10,
         radius: int = 7,
-        entity_filter: list[str] = None) -> list:
+        entity_filter: Optional[list[str]] = None) -> list:
     """
     Creates training data for the autoencoder.
     """

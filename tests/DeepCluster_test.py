@@ -2,7 +2,7 @@ import pytest
 
 from tensorflow.keras.layers import Layer
 
-from src.DeepCluster import DeepCluster
+from deep_cluster import DeepCluster
 
 
 @pytest.fixture(scope='module')
