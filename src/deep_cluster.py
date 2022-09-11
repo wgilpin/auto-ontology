@@ -505,6 +505,9 @@ class DeepCluster():
         self.model.save_weights(os.path.join(self.save_dir, 'DEC_model_final.h5'))
 
     def cluster_pred_acc(self):
+        """
+        Predict the cluster labels y_pred and calculate the accuracy against y.
+        """
         NER_only= DataFrame({'y':self.y, 'y_clus':self.y_pred})
         unk_tuple = [k for k, v in self.mapping.items() if v == 'UNKNOWN']
         unk_idx = unk_tuple[0] if len(unk_tuple) > 0 else None
@@ -515,6 +518,9 @@ class DeepCluster():
         return frac
 
     def make_load_model(self):
+        """
+        Make the model and load the weights.
+        """
         self.make_model()
 
         ae_weights_file = os.path.join(self.save_dir, 'jae_weights.h5')
@@ -540,7 +546,7 @@ class DeepCluster():
             self.output("Data Loaded")   
 
         self.make_load_model()
-        
+
         # predict cluster labels
         self.output("Predicting...")
         q, _ = self.model.predict(self.x, verbose=1)
