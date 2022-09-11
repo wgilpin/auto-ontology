@@ -6,7 +6,7 @@ import logging
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from typing import Tuple, overload
+from typing import Tuple
 
 from imblearn.over_sampling import RandomOverSampler
 from spacyNER import (TrainingDataSpacy,
