@@ -153,14 +153,14 @@ def do_clustering(
         optics = OPTICS(
             min_samples=dbscan_min_samples,
             min_cluster_size=min_cluster_size,
-            metric='manhattan')
+            metric='cosine')
         y_pred = optics.fit_predict(z_state)
         centers = np.zeros((len(np.unique(y_pred))))
     elif clustering == "agg":
         agg = AgglomerativeClustering(
             n_clusters=n_clusters,
-            affinity='euclidean',
-            linkage='ward')
+            affinity='cosine',
+            linkage='complete')
         y_pred = agg.fit_predict(z_state)
         centers = None
     else:
