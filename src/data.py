@@ -334,6 +334,10 @@ def load_data(
     if entity_filter:
         # entity_filter to id list
         mapping = {k:v for k,v in mapping.items() if v in entity_filter}
+        if get_text:
+            # include unknowns
+            mapping[1]="UNKNOWN"
+
         allowed_y_list = [k for k,v in mapping.items() if v in entity_filter]
         trg = trg[trg['label'].isin(allowed_y_list)]
 
