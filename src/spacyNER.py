@@ -198,13 +198,13 @@ class TrainingDataSpacy():
         Loads the embeddings cache.
         """
         if os.path.exists(self.data_name) :
-            print(f"Loading {self.data_name}") 
+            print(f"Loading {self.data_name}")
             self.embeddings = pd.read_pickle(self.data_name)
         else:
             self.embed_all()
 
 
-    def cached_sent_embed(self, sentence_no: int) -> np.ndarray:
+    def cached_sent_embed(self, sentence_no: int) -> list:
         """
         Returns the cached sentence embedding.
         """
@@ -225,7 +225,7 @@ class TrainingDataSpacy():
         else:
             # embed only chunk
             self.emb_pipe = get_pipe()
-            embeddings = embed(self.emb_pipe, sent)
+            embeddings = embed(self.emb_pipe, sent) # type: ignore
             return embeddings[0]
 
     def embed_chunk(self,
@@ -250,7 +250,8 @@ class TrainingDataSpacy():
 
         if self.embed_sentence_level:
             # we have the embeddings for the whole sentence already
-            embedding = self.embed_text(str(doc), sent_no, start_tok, end_tok, embeddings)
+            embedding = self.embed_text(
+                            str(doc), sent_no, start_tok, end_tok, embeddings)
         else:
             # will have to embed the chunk
             embedding = self.embed_text(short_sent, sent_no, start_tok, end_tok)
@@ -292,7 +293,7 @@ class TrainingDataSpacy():
     def get_training_data_spacy(self,
                     sents: list[str],
                     length: int = 10,
-                    name:str = None
+                    name: Optional[str] = None
                     ) -> Tuple[pd.DataFrame, dict]:
         """
         Creates training data for the autoencoder given a list of sentences
@@ -302,7 +303,7 @@ class TrainingDataSpacy():
             length if length > 0 else 'all',
             self.radius)
 
-        self.data_name = os.path.join("./data", name)
+        self.data_name = os.path.join("./data", name) # type: ignore
         self.sents = sents
         if self.embed_sentence_level:
             self.load_embs_cache()
