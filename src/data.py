@@ -6,7 +6,7 @@ import logging
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from typing import Tuple
+from typing import Tuple, Any
 
 from imblearn.over_sampling import RandomOverSampler
 from spacyNER import (TrainingDataSpacy,
@@ -38,7 +38,7 @@ if (not setup_logging(logfile_file="project_log.log")):
 # %%
 
 
-def output(s:str, verbose:int=1):
+def output(s:Any, verbose:int=1):
     """
     Outputs a string to the console if verbose is set to 1 or higher
     """
@@ -318,7 +318,7 @@ def load_data(
         print("Creating data")
         sample_conll = get_sample_conll_hf(size, train=train)
         sample_name = f"conll_n{size}_{'train' if train else 'test'}"
-        
+
         embedder = TrainingDataSpacy(
             embed_sentence_level=True,
             radius=radius)
@@ -340,7 +340,6 @@ def load_data(
 
         allowed_y_list = [k for k,v in mapping.items() if v in entity_filter]
         trg = trg[trg['label'].isin(allowed_y_list)]
-
 
     output(f'Loaded file: {trg.shape[0]} samples', verbose)
 
