@@ -115,7 +115,7 @@ def do_clustering(
     """
     dbscan_eps = 1
     dbscan_min_samples = 5
-    min_cluster_size = 5
+    min_cluster_size = 15
     if 'eps' in params:
         dbscan_eps = params['eps']
     if 'min_samples' in params:
@@ -732,11 +732,20 @@ class DeepLatentCluster():
 
         return z_space
 
-    def visualise_umap(self, z_sample, y_sample, to_dir: bool=True) -> np.ndarray:
+    def visualise_umap(
+                    self,
+                    z_sample,
+                    y_sample,
+                    to_dir: bool=True,
+                    name: Optional[str] = None) -> np.ndarray:
         """
         Visualise the latent space using UMAP
         """
         self.output("Visualising")
+        if name is None:
+            name = "UMAP"
+        else:
+            print(f"Saving to {name}")
         y_label = np.asarray(
             [(self.mapping[l] if l in self.mapping else l) for l in y_sample])
         mapper = umap.UMAP(metric='manhattan',
@@ -744,9 +753,9 @@ class DeepLatentCluster():
         plt_u.points(mapper, labels=y_label, height=1200, width=1200)
 
         if to_dir:
-            save_file = os.path.join(self.save_dir, "UMAP.png")
+            save_file = os.path.join(self.save_dir, f"{name}.png")
         else:
-            save_file = "UMAP Benchmark.png"
+            save_file = f"{name} Benchmark.png"
         plt_u.plt.savefig(save_file)
         if self.verbose > 0:
             plt_u.plt.show()
