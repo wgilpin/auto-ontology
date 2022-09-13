@@ -281,7 +281,7 @@ class TrainingDataSpacy():
             item = self.embed_chunk(sent_no, s, nc, is_entity=False, embeddings=embs)
             res.append(item)
             for ent in nc.ents:
-                if ent.start == nc.start and ent.end == nc.end:
+                if ent.start >= nc.start and ent.end <= nc.end:
                     # same span
                     res.append(
                         self.embed_chunk(
