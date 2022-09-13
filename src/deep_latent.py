@@ -534,6 +534,7 @@ class DeepLatentCluster():
         plt.ylabel('loss')
         plt.xlabel('epoch')
         plt.show()
+        plt.savefig(os.path.join(self.save_dir, 'AE loss.png'))
 
         # # init cluster centres before train
         # self.init_cluster_centers()
@@ -546,6 +547,8 @@ class DeepLatentCluster():
         plt.ylabel('loss')
         plt.xlabel('epoch')
         plt.show()
+        plt.savefig(os.path.join(self.save_dir, 'Full model loss.png'))
+
 
         print("Training Done")
 
