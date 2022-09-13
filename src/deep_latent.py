@@ -718,20 +718,10 @@ class DeepLatentCluster():
 
         return z_space, y_sample, str_sample
 
-    def apply_cluster_algo(self, z_sample, y_sample):
+    def visualise_umap(self, z_sample, y_sample, to_dir: bool=True) -> np.ndarray:
         """
-        Apply the clustering algorithm to the latent space
+        Visualise the latent space using UMAP
         """
-        self.output(f"Clustering {z_sample.shape[0]} points "
-                    f"using {self.config['cluster']}")
-        y_pred_sample, c = do_clustering(
-            clustering=self.config['cluster'],
-            n_clusters=self.config['num_clusters'],
-            z_state=z_sample,
-            params={'verbose': self.verbose})
-        if self.config['cluster'] in ['DBSCAN', 'OPTICS']:
-            self.config['num_clusters'] = len(c)
-
         self.output("Visualising")
         y_label = np.asarray(
             [(self.mapping[l] if l in self.mapping else l) for l in y_sample])
@@ -739,11 +729,15 @@ class DeepLatentCluster():
                            verbose=self.verbose > 0).fit(z_sample)
         plt_u.points(mapper, labels=y_label, height=1200, width=1200)
 
+        if to_dir:
         save_file = os.path.join(self.save_dir, "UMAP.png")
+        else:
+            save_file = "UMAP Benchmark.png"
         plt_u.plt.savefig(save_file)
         if self.verbose > 0:
             plt_u.plt.show()
         plt_u.plt.close()
+        return y_label
 
         return y_pred_sample, y_label
 
