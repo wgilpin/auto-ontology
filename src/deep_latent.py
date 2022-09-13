@@ -3,6 +3,7 @@ import fractions
 import os
 import math
 import glob
+from typing import Optional
 import warnings
 from pathlib import Path
 import umap
@@ -47,7 +48,7 @@ class Cluster:
     """
     freqs: dict
     freqs_unknown: dict
-    class_freqs: dict
+    class_freqs: np.ndarray
     frac: float
     n: int
     label: str
@@ -55,7 +56,7 @@ class Cluster:
     clus_no: int
     name: str
 
-ClusterList = dict[str: Cluster]
+ClusterList = dict[str, Cluster]
 
 def write_results_page(clusters, new_clusters, save_dir, test_name, scores):
     """
@@ -97,7 +98,10 @@ def freqs_descending(df, col):
 
 
 def do_clustering(
-        clustering: str, n_clusters: int, z_state: DataFrame, params=None):
+        clustering: str,
+        n_clusters: int,
+        z_state: DataFrame,
+        params: dict) -> tuple[np.ndarray, np.ndarray]:
     """
     Perform clustering on the data.
         -clustering: the clustering algorithm to use
@@ -112,13 +116,12 @@ def do_clustering(
     dbscan_eps = 1
     dbscan_min_samples = 5
     min_cluster_size = 5
-    if params is not None:
-        if 'eps' in params:
-            dbscan_eps = params['eps']
-        if 'min_samples' in params:
-            dbscan_min_samples = params['min_samples']
-        if 'min_cluster_size' in params:
-            min_cluster_size = params['min_cluster_size']
+    if 'eps' in params:
+        dbscan_eps = params['eps']
+    if 'min_samples' in params:
+        dbscan_min_samples = params['min_samples']
+    if 'min_cluster_size' in params:
+        min_cluster_size = params['min_cluster_size']
 
     if clustering == 'GMM':
         gmix = mixture.GaussianMixture(
@@ -163,7 +166,7 @@ def do_clustering(
     else:
         raise ValueError('Clustering algorithm not specified/unknown.')
 
-    return y_pred, centers
+    return y_pred, centers  
 
 
 def show_wordcloud(
@@ -212,23 +215,26 @@ class DeepLatentCluster():
     def __init__(
         self,
         run_name: str,
-        config: dict = None,
+        config: dict,
         verbose: int = 1,
     ):
 
-        self.x = None
-        self.y = None
-        self.mapping = None
+        self.x: Optional[DataFrame] = None
+        self.y: Optional[DataFrame] = None
+        self.x_sample = None
+        self.y_sample = None
+        self.str_sample = None
+        self.mapping: Optional[dict] = None
         self.strings: list[str] = []
         self.y_pred_last = None
         self.input_dim = 768
         self.batch_size = 256
 
         self.run_name = run_name
-        self.model = None
-        self.encoder = None
-        self.autoencoder = None
-        self.save_dir = None
+        self.model: Optional[Model] = None
+        self.encoder: Optional[Model] = None
+        self.autoencoder: Optional[Model] = None
+        self.save_dir = ""
         self.verbose = verbose
         self.train_acc_metric = None
 
@@ -254,8 +260,10 @@ class DeepLatentCluster():
                 epsilon=None,
                 decay=0.0,
                 amsgrad=False),
+            "latent_loss": "cross_entropy",
             "noise_factor": 0.0,
             "loss": k.losses.binary_crossentropy,
+            "epochs": 1,
             "train_size": 10000,
             "num_clusters": 25,
             "cluster": "GMM",
@@ -452,7 +460,7 @@ class DeepLatentCluster():
                 enc[-1],
             ])
 
-    def make_model(self, verbose: int = None) -> None:
+    def make_model(self, verbose: Optional[int]=1) -> None:
         """
         Make the model and saves the image of it
         """
@@ -461,7 +469,7 @@ class DeepLatentCluster():
 
         self.create_model()
 
-        self.model.compile(
+        self.model.compile(# type: ignore
             loss=[
                 self.latent_loss(
                     self.model.get_layer("encoder_2").get_weights()[0])],
@@ -478,6 +486,7 @@ class DeepLatentCluster():
     def reconstr_loss(self, x, x_pred):
         """
         Reconstruction loss from autoencoder
+        Mean squared error
         """
         return tf.reduce_mean(tf.square(tf.subtract(x, x_pred)))
 
@@ -489,6 +498,7 @@ class DeepLatentCluster():
             """
             A loss function is of the form loss(y_true, y_pred), but
             we don't need y_true, so we ignore it.
+
             """
             p = make_q(y_pred, self.batch_size, alpha=self.config['alpha1'])
             q = make_q(z_enc, self.batch_size, alpha=self.config['alpha2'])
@@ -511,7 +521,7 @@ class DeepLatentCluster():
             self.output("Data Loaded")
 
         if self.model is None:
-            self.make_model()
+            self.make_model(verbose)
 
         self.output("Training autoencoder")
         early_stopping_cb = EarlyStopping(
@@ -600,23 +610,24 @@ class DeepLatentCluster():
         index = 0
         update_interval = 140
         losses = []
-        for ite in range(int(self.config['max_iter'])):
-            if ite % update_interval == 0:
-                self.output(f"Iter:{ite} -> loss:{loss}")
-            idx = index_array[
-                index * self.batch_size:
-                min((index+1) * self.batch_size, self.x.shape[0])]
-            loss = self.train_step(self.x[idx], self.y[idx])
-            losses += [loss]
-            # stop training if tolerance threshold is reached
-            patience = 5
-            max_delta = np.max(np.abs(losses[-patience:] - losses[-1]))
-            if len(losses) > 3 and max_delta < tol:
-                print("Stop traing for tolerance threshold reached")
-                break
-        if self.verbose == 0:
-            # final values
-            print(f'Iter: {ite} loss={loss}')
+        for epoch in trange(self.config['epochs']):
+            for ite in trange(int(self.config['max_iter']), leave=False):
+                if ite % update_interval == 0:
+                    self.output(f"Iter:{ite} -> loss:{loss}")
+                idx = index_array[
+                    index * self.batch_size:
+                    min((index+1) * self.batch_size, self.x.shape[0])]
+                loss = self.train_step(self.x[idx], self.y[idx])
+                losses += [loss]
+                # stop training if tolerance threshold is reached
+                patience = 5
+                max_delta = np.max(np.abs(losses[-patience:] - losses[-1]))
+                if len(losses) > 3 and max_delta < tol:
+                    print("Stop traing for tolerance threshold reached")
+                    break
+            if self.verbose == 0:
+                # final values
+                print(f'epoch: {epoch} loss={loss}')
         self.model.save_weights(os.path.join(
             self.save_dir, 'lat_model_final.h5'))
         return losses
@@ -625,7 +636,7 @@ class DeepLatentCluster():
         """
         Load a model from a directory
         """
-        self.make_model()
+        self.make_model(self.verbose)
 
         if load_dir is None:
             load_dir = self.save_dir
@@ -651,11 +662,11 @@ class DeepLatentCluster():
         freqs = {w: f for w, f in freq_list}
         return freqs
 
-    def get_sample(self, sample_size: int):
+    def get_sample(self, sample_size: int) -> None:
         """
         Get a sample of the data
         """
-        if self.config['train_size'] != sample_size or self.x is None:
+        if self.config['train_size'] != sample_size or self.x_sample is None:
             self.output("Load Data ")
             self.x, self.y, self.mapping, self.strings = load_data(
                 0,
@@ -676,9 +687,11 @@ class DeepLatentCluster():
             y_sample = self.y
             str_sample = self.strings
 
-        return x_sample, y_sample, str_sample
+        self.x_sample = x_sample
+        self.y_sample = y_sample
+        self.str_sample = str_sample
 
-    def predict(self, sample_size: int, head: str = None):
+    def predict(self, sample_size: int, head: str):
         """
         Make predictions for the given sample size.
         Sample will be from Test dataset not Train data
@@ -691,20 +704,21 @@ class DeepLatentCluster():
             head = 'z'
         self.output(f"Using [{head}] head for predictions")
 
-        x_sample, y_sample, str_sample = self.get_sample(sample_size)
+        self.get_sample(sample_size)
 
         # predict z space
-        num_batches = math.ceil((1.0 * len(x_sample)) / self.batch_size)
+        assert self.x_sample is not None
+        num_batches = math.ceil((1.0 * len(self.x_sample)) / self.batch_size)
         self.output(f"Predicting...{num_batches} batches of "
-                    f"{self.batch_size} x {x_sample.shape[1]}")
+                    f"{self.batch_size} x {self.x_sample.shape[1]}")
 
         # run the model on sampled x in batches
         z_sample = []
         for i in trange(num_batches, disable=self.verbose == 0):
             idx = np.arange(
                 i * self.batch_size,
-                min(len(x_sample), (i + 1) * self.batch_size))
-            x = x_sample[idx]
+                min(len(self.x_sample), (i + 1) * self.batch_size))
+            x = self.x_sample[idx]
             if head == 'z':
                 _, z_batch = self.model.predict(x, verbose=0)
             elif head == 'ae':
@@ -712,11 +726,11 @@ class DeepLatentCluster():
             elif head == 'enc':
                 z_batch = self.encoder.predict(x, verbose=0)
 
-            z_sample += [z_batch]
+            z_sample += [z_batch] # type: ignore
 
-        z_space = np.vstack(np.array(z_sample))
+        z_space = np.vstack(np.array(z_sample)) # type: ignore
 
-        return z_space, y_sample, str_sample
+        return z_space
 
     def visualise_umap(self, z_sample, y_sample, to_dir: bool=True) -> np.ndarray:
         """
@@ -730,7 +744,7 @@ class DeepLatentCluster():
         plt_u.points(mapper, labels=y_label, height=1200, width=1200)
 
         if to_dir:
-        save_file = os.path.join(self.save_dir, "UMAP.png")
+            save_file = os.path.join(self.save_dir, "UMAP.png")
         else:
             save_file = "UMAP Benchmark.png"
         plt_u.plt.savefig(save_file)
@@ -738,6 +752,22 @@ class DeepLatentCluster():
             plt_u.plt.show()
         plt_u.plt.close()
         return y_label
+
+    def apply_cluster_algo(self, z_sample):
+        """
+        Apply the clustering algorithm to the latent space
+        """
+        self.output(f"Clustering {z_sample.shape[0]} points "
+                    f"using {self.config['cluster']}")
+        y_pred_sample, c = do_clustering(
+            clustering=self.config['cluster'],
+            n_clusters=self.config['num_clusters'],
+            z_state=z_sample,
+            params={'verbose': self.verbose})
+        if self.config['cluster'] in ['DBSCAN', 'OPTICS']:
+            self.config['num_clusters'] = len(c)
+
+        y_label = self.visualise_umap(z_sample, self.y_sample)
 
         return y_pred_sample, y_label
 
@@ -785,7 +815,7 @@ class DeepLatentCluster():
             if clus_no < 0:
                 continue
             cluster = sample[sample['y_pred'] == clus_no]
-            prob_ent = np.argmax(y_tru_per_clus[clus_no])
+            prob_ent = int(np.argmax(y_tru_per_clus[clus_no]))
             prob_lbl = self.mapping[prob_ent]
             frac = y_tru_frac_by_clus[clus_no][prob_ent]
 
@@ -836,9 +866,7 @@ class DeepLatentCluster():
 
     def eval_cluster(self,
                     y_pred_sample,
-                    y_sample,
                     y_label,
-                    str_sample,
                     rearrange: bool=True):
         """
         show wordclouds for each cluster
@@ -846,8 +874,8 @@ class DeepLatentCluster():
         self.output("CLUSTERS")
 
         raw_sample = DataFrame({
-            'text': str_sample,
-            'y_true': y_sample,
+            'text': self.str_sample,
+            'y_true': self.y_sample,
             'y_pred': y_pred_sample,
             'y_label': y_label,
         })
@@ -908,14 +936,23 @@ class DeepLatentCluster():
 
         return sample, clusters, f1
 
-    def show_core_metrics(self, y_sample, y_pred_sample, all_clusters):
+    def show_core_metrics(self, y_pred_sample, all_clusters, new_labels):
         """
         show the core metrics for the clustering
         """
+        assert self.mapping is not None
+        assert self.y_sample is not None
 
         # confusion matrix
-        cm_width = max(8, len(np.unique(y_pred_sample)) * 2)
+        num_predicted = len(np.unique(y_pred_sample))
+        cm_width = max(8, num_predicted * 2)
         cm_width = min(16, cm_width)
+        plot_confusion(self.y_sample,
+                       y_pred_sample,
+                       self.mapping,
+                       self.save_dir,
+                       size=cm_width,
+                       new_labels=new_labels)
 
         # how big are the predicted clusters
         cluster_counts = np.unique(y_pred_sample, return_counts=True)[1]
@@ -1009,9 +1046,9 @@ class DeepLatentCluster():
     @timer
     def evaluate_model(self,
                        load_dir: str,
-                       sample_size: int = 0,
-                       head: str = None,
-                       verbose: int = 1) -> None:
+                       sample_size: int,
+                       head: str = "enc",
+                       verbose: int = 1) -> dict:
         """
         Run the model.
         """
@@ -1021,11 +1058,11 @@ class DeepLatentCluster():
 
         # predict the requested sample size
         # z is the latent space
-        z_sample, y_sample, str_sample = self.predict(sample_size, head)
+        z_sample = self.predict(sample_size, head)
 
-        self.do_evaluation(z_sample, y_sample, str_sample)
+        return self.do_evaluation(z_sample)
 
-    def do_evaluation(self, z_sample, y_sample, str_sample):
+    def do_evaluation(self, z_sample):
         """
         Evaluate the model.
         - z_sample: the latent space
@@ -1033,15 +1070,20 @@ class DeepLatentCluster():
         - str_sample: the original strings
         """
         # cluster the latent space using requested algorithm
-        y_pred_sample, y_label = self.apply_cluster_algo(z_sample, y_sample)
+        y_pred_sample, y_label = self.apply_cluster_algo(z_sample)
 
         # assign labels to the clusters
         all_clusters, clusters, cluster_f1 = self.eval_cluster(
-            y_pred_sample, y_sample, y_label, str_sample)
+                                                    y_pred_sample, y_label)
+
+        # list of new clusters by id number
+        labels_no = {v.clus_no: k for k,v in clusters.items()}
+        labels_ent = {v.entity_id: k for k,v in clusters.items()}
+        new_labels = {**labels_no, **labels_ent}
 
         # overall scores
         scores_agg = self.show_core_metrics(
-            y_sample, y_pred_sample, all_clusters)
+            y_pred_sample, all_clusters, new_labels)
 
         # cluster scores
         cluster_list = self.score_clusters(clusters)
@@ -1049,7 +1091,7 @@ class DeepLatentCluster():
         # output file
         self.save_scores(cluster_list, scores_agg)
 
-        scores = {**scores_agg, 'cluster F1': cluster_f1}
+        scores = {**scores_agg, 'cluster F1': cluster_f1} # type: ignore
 
         return scores
 
@@ -1060,29 +1102,32 @@ class DeepLatentCluster():
         self.verbose = verbose
 
         # predict the requested sample size
-        x_sample, y_sample, str_sample = self.get_sample(sample_size)
+        self.get_sample(sample_size)
 
-        self.do_evaluation(x_sample, y_sample, str_sample)
+        self.do_evaluation(self.x_sample)
 
-    def random_benchmark(self, sample_size: int = 0, verbose: int = 1) -> None:
+    def random_benchmark(self, sample_size: int = 0, verbose: int = 1) -> dict:
         """
         Benchmark a sample with cluster allocation from cluster algorithm only
         """
         self.verbose = verbose
 
         # predict the requested sample size
-        x_sample, y_sample, str_sample = self.get_sample(sample_size)
+        self.get_sample(sample_size)
 
         # cluster the latent space using requested algorithm
-        y_pred_sample, y_label = self.apply_cluster_algo(x_sample, y_sample)
+        y_pred_sample, y_label = self.apply_cluster_algo(self.x_sample)
 
         # assign labels to the clusters
         all_clusters, clusters, cluster_f1 = self.eval_cluster(
-            y_pred_sample, y_sample, y_label, str_sample, rearrange=False)
+            y_pred_sample, y_label, rearrange=False)
+
+        # list of new clusters by id number
+        new_labels = {v.clus_no: k for k,v in clusters.items()}
 
         # overall scores
         scores_agg = self.show_core_metrics(
-            y_sample, y_pred_sample, all_clusters)
+            y_pred_sample, all_clusters, new_labels=new_labels)
 
         # cluster scores
         cluster_list = self.score_clusters(clusters)
