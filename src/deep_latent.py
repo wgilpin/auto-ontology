@@ -916,8 +916,14 @@ class DeepLatentCluster():
         # confusion matrix
         cm_width = max(8, len(np.unique(y_pred_sample)) * 2)
         cm_width = min(16, cm_width)
-        plot_confusion(y_sample, y_pred_sample,
-                       self.mapping, self.save_dir, cm_width)
+
+        # how big are the predicted clusters
+        cluster_counts = np.unique(y_pred_sample, return_counts=True)[1]
+        # how big are the new ones?
+        
+        num_new = cluster_counts[len(self.mapping):]
+        # how many of the new ones are more than 2.5% of the sample?
+        num_new_large = len(num_new[num_new > (len(self.y_sample) * 0.025)])
 
         # metrics
         y = all_clusters['y_true']
@@ -931,11 +937,13 @@ class DeepLatentCluster():
         print(f"Accuracy = {acc:.4f}")
         print(f"Precision = {precision:.4f}")
         print(f"Recall = {recall:.4f}")
+        print(f"New clusters = {num_new_large:6d}")
         scores = {
             'f1': f1,
             'acc': acc,
             'precision': precision,
             'recall': recall,
+            'new_clusters': num_new_large,
         }
         return scores
 
