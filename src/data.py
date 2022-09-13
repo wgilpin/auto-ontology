@@ -6,7 +6,7 @@ import logging
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from typing import Tuple, Any
+from typing import Optional, Tuple, Any
 
 from imblearn.over_sampling import RandomOverSampler
 from spacyNER import (TrainingDataSpacy,
@@ -46,7 +46,7 @@ def output(s:Any, verbose:int=1):
         print(s)
     logging.info(s)
 
-def read_conll_dataset(filename: str) -> list:
+def read_conll_dataset(filename: str) -> list[list]:
     """
     Reads the CONLL dataset.
     """
@@ -59,7 +59,7 @@ def read_conll_dataset(filename: str) -> list:
     return data
 
 
-def parse_conll(data: list) -> list[str]:
+def parse_conll(data: list) -> list[dict]:
     """
         returns list of sentences
     """
@@ -180,6 +180,8 @@ def pre_embed(dataset: str,
     elif dataset == "fewNERD":
         logging.info("Reading fewNERD dataset")
         sentences = read_fewNERD_sentences(length)
+    else:
+        raise ValueError("Unknown dataset")
     result = []
     logging.info("Making pipe")
 
@@ -284,12 +286,12 @@ def get_training_data(
 
 def load_data(
         size: int,
-        entity_filter: list=None,
+        entity_filter: Optional[list]=None,
         get_text: bool=False,
         oversample: bool=True,
         verbose:int=1,
         radius: int=0,
-        train:bool=True) -> Tuple[pd.DataFrame, pd.DataFrame, dict, list]:
+        train:bool=True) -> Tuple[np.ndarray, np.ndarray, dict, Optional[list]]:
     """
     Load data from disk
     Arguments:
