@@ -1,7 +1,11 @@
 import math
 import itertools as it
 
-def grid_search(config: dict, fn: callable, n: int = 1) -> list[dict]:
+def grid_search(
+        config: dict,
+        fn: callable,
+        n: int = 1,
+        sample_size:int = 3000) -> list[dict]:
     """
     Grid search for hyperparameter tuning.
     :param config: dict, hyperparameter configuration
@@ -22,6 +26,6 @@ def grid_search(config: dict, fn: callable, n: int = 1) -> list[dict]:
     n_runs = math.prod([len(p_list) for p_list in config.values()])
     scores = []
     for index, combo in enumerate(combos * n):
-        scores.append(fn(combo, index, n_runs))
+        scores.append(fn(combo, index, n_runs, sample_size))
 
     return scores
