@@ -341,6 +341,8 @@ def load_data(
     output(f'Loaded file: {trg.shape[0]} samples', verbose)
 
     x, _, y, _, strings = test_train_split(trg, oversample=oversample, verbose=verbose)
+    x = x.astype('float32')
+    y = y.astype('float32')
     if oversample:
         output("Post Oversampling", verbose)
     output(f"x: {x.shape}, y: {y.shape}", verbose)
