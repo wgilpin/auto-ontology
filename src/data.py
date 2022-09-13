@@ -141,7 +141,7 @@ def test_train_split(df, frac=1.0, oversample: bool=True, verbose:int=1):
         # oversample for balance
         output(verbose=verbose, s="Balancing data")
         ros = RandomOverSampler(random_state=42)
-        train_x_df, train_y_df = ros.fit_resample(train_x_df, train_y_df)
+        train_x_df, train_y_df = ros.fit_resample(train_x_df, train_y_df) # type: ignore
     train_x_strings = train_x_df['chunk']
     train_x_df = np.array(train_x_df.drop(
         columns=['chunk', 'label', 'label_id', 'sentence']))
@@ -185,7 +185,7 @@ def pre_embed(dataset: str,
     result = []
     logging.info("Making pipe")
 
-    from transformers import TFDistilBertModel
+    from transformers import TFDistilBertModel 
     emb_pipe = get_pipe('distilbert-base-uncased', TFDistilBertModel)
 
     logging.info("Made pipe")
@@ -263,7 +263,10 @@ def get_training_data(
                 df = df[0:count]
             merged = training_data_from_embeds_spacy(df,
                                                      radius=radius,
-                                                     entity_filter=entity_filter)
+                                                     )
+        else:
+            raise ValueError("Unknown dataset")
+
         logging.info("Created entries: %s", len(merged))  # create full DF
 
         x_train_np = np.stack([m["embedding"] for m in merged])
@@ -281,7 +284,7 @@ def get_training_data(
         df.to_csv(filename, index=False)
         logging.info("Saved %s", filename)
 
-    return test_train_split(df, fraction)
+    return test_train_split(df, fraction) # type: ignore
 
 
 def load_data(
@@ -291,7 +294,7 @@ def load_data(
         oversample: bool=True,
         verbose:int=1,
         radius: int=0,
-        train:bool=True) -> Tuple[np.ndarray, np.ndarray, dict, Optional[list]]:
+        train:bool=True) -> Tuple[np.ndarray, np.ndarray, dict, list[str]]:
     """
     Load data from disk
     Arguments:
