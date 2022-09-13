@@ -492,8 +492,12 @@ class DeepLatentCluster():
             """
             p = make_q(y_pred, self.batch_size, alpha=self.config['alpha1'])
             q = make_q(z_enc, self.batch_size, alpha=self.config['alpha2'])
-            latent_loss = tf.reduce_sum(-(tf.multiply(p, tf.math.log(q))))
-            return latent_loss
+            if self.config['latent_loss'] == 'kl':
+                return tf.reduce_sum(-(tf.multiply(p, tf.math.log(tf.divide(p,q)))))
+            elif self.config['latent_loss'] == 'cross_entropy':
+                return tf.reduce_sum(-(tf.multiply(p, tf.math.log(q))))
+            else:
+                raise ValueError(f"Unknown loss type {self.config['latent_loss']}")
         return loss
 
     def train_model(self, verbose: int = 1) -> None:
