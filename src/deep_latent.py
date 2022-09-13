@@ -186,19 +186,12 @@ def show_wordcloud(
     else:
         print(f"No words for cluster {name}")
 
-
-def pairwise_sqd_distance(X):
-    """
-    Calculate the pairwise squared distance between all points in X.
-    """
-    return pairwise.pairwise_distances(X, metric='sqeuclidean')
-
-
 def make_q(z, batch_size, alpha):
     """
     Calculate the probability distribution of z
     """
-    sqd_dist_mat = np.float32(pairwise_sqd_distance(z))
+    sqd_dist_mat = np.float32(
+                        pairwise.pairwise_distances(z, metric='sqeuclidean'))
     q = tf.pow((1 + sqd_dist_mat/alpha), -(alpha+1)/2)
     q = tf.linalg.set_diag(q, tf.zeros(shape=[batch_size]))
     q = q / tf.reduce_sum(q, axis=0, keepdims=True)
