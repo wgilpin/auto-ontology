@@ -264,14 +264,18 @@ class DeepCluster():
         return y_label
 
 
-    def make_data(self, oversample: bool=True) -> None:
+    def make_data(
+                self,
+                oversample: bool=True,
+                folder: Optional[str]=None) -> None:
         """ Make the data for the model """
         self.output("Load Data")
-        self.x, self.y, self.mapping, self.strings = load_data(
+        self.x, self.y, self.mapping, self.strings, _ = load_data(
                                     self.train_size,
                                     entity_filter=self.entities,
                                     get_text=True,
                                     oversample=oversample,
+                                    folder=folder,
                                     verbose=self.verbose)
         self.input_dim = self.x.shape[1]
         self.output("Data Loaded")
@@ -340,11 +344,11 @@ class DeepCluster():
         weight = q ** 2 / q.sum(0)
         return (weight.T / weight.sum(1)).T
 
-    def train_model(self):
+    def train_model(self, folder: Optional[str] = None) -> None:
         """
         Run the model.
         """
-        self.make_data(oversample=True)
+        self.make_data(oversample=True, folder=folder)
 
         self.output("Data Loaded")
 
@@ -530,7 +534,5 @@ class DeepCluster():
         """
         self.verbose = verbose
         self.make_model()
-        self.train_model()
+        self.train_model(folder=folder)
         self.evaluate_model(eval_size, folder=folder)
-
-
