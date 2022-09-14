@@ -398,148 +398,53 @@ class DeepCluster():
         self.output(f"Loading model weights from {model_weights_file}")
         self.model.load_weights(model_weights_file)
 
-    def evaluate_model(self, eval_size: int, verbose:int=1) -> None:
+    def evaluate_model(
+                    self,
+                    eval_size: int,
+                    verbose:int=1,
+                    radius:int=6,
+                    folder: Optional[str]=None,
+                    output: Optional[str]=None) -> dict:
         """
         Run the model.
         """
         self.verbose = verbose
 
-        if self.train_size != eval_size:
+        if self.train_size != eval_size or self.x is None:
             self.output("Load Data")
             self.x, self.y, self.mapping, self.strings = load_data(
                                                             eval_size,
                                                             get_text=True,
-                                                            verbose=verbose)
+                                                            oversample=False,
+                                                            verbose=verbose,
+                                                            radius=radius,
+                                                            train=False,
+                                                            folder=folder)
+            assert self.mapping is not None
             self.output("Data Loaded")   
 
         self.make_load_model()
 
-        # predict cluster labels
-        self.output("Predicting...")
-        q, _ = self.model.predict(self.x, verbose=1)
-        p = self.target_distribution(q)  # update the auxiliary target distribution p
+        self.output("Predicting")
 
-
-        # evaluate the clustering performance
-        self.output("Evaluating...")
+        q, _ = self.model.predict(self.x, verbose=0)
+        self.output("Predicted")
         self.y_pred = q.argmax(1)
-        if self.y is not None:
-            acc = np.round(metrics.acc(self.y, self.y_pred), 5)
-            nmi = np.round(metrics.nmi(self.y, self.y_pred), 5)
-            ari = np.round(metrics.ari(self.y, self.y_pred), 5)
-            cluster_acc = self.cluster_pred_acc()
-            print(f'Acc = {acc:.5f}, nmi = {nmi:.5f}, ari = {ari:.5f}'
-                  f' ; Cluster Acc={cluster_acc:.5f}')
 
-        # confusion matrix
-            nmi = np.round(metrics.nmi(self.y, self.y_pred), 5)
-        cm_width = max(8, len(np.unique(self.y_pred)) * 2)
-        cm_width = min(16, cm_width)
-        plot_confusion(self.y, self.y_pred, self.mapping, self.save_dir, cm_width)
+        raw_sample = DataFrame({
+            'text': self.strings,
+            'y_true': self.y,
+            'y_pred': self.y_pred,
+        })
 
-        # show wordclouds for each cluster
-        self.output ("CLUSTERS")
-        clusters = {}
-        predicted = DataFrame({
-            'text':self.strings,
-            'y_pred':self.y_pred,
-            'y_true':self.y})
-        for cluster_no in tqdm(range(self.num_clusters)):
-            y_pred_for_key = predicted[predicted['y_pred']==cluster_no]
-            true_label = 'UNKNOWN'
-            modal_value = y_pred_for_key['y_true'].mode()
-            if len(modal_value)>0:
-                if modal_value[0] in self.mapping:
-                    true_label = self.mapping[modal_value[0]]
-                # confidence - fraction of this cluster that is actually this cluster
-                y_true_this_cluster = len(
-                    y_pred_for_key[y_pred_for_key['y_true']==modal_value[0]])
-                frac = y_true_this_cluster/len(y_pred_for_key)
+        # create output folder if needed
+        if output is not None:
+            out_dir = f"./results/{output}"
+            if not os.path.exists(out_dir):
+                # create save dir
+                os.makedirs(out_dir)
             else:
-                frac = 0
-
-            # wordcloud
-            unique, counts = np.unique(y_pred_for_key['text'], return_counts=True)
-            freq_list = np.asarray((unique, counts)).T
-            freq_list =  sorted(freq_list, key=lambda x: -x[1])[0:50]
-            freqs = {w: f for w,f in freq_list}
-            entry = {'freqs':freqs, 'frac':frac, 'n':len(y_pred_for_key)}
-            if true_label == 'UNKNOWN':
-                clusters[f"UNK-{cluster_no}"] = entry
-            elif true_label in clusters:
-                if clusters[true_label]['frac'] < frac:
-                    # we found a better cluster for this label
-                    clusters[true_label] = entry
-                else:
-                    # this cluster is worse than this one, so it's unknown
-                    clusters[f"UNK-{cluster_no} Was {true_label}"] = entry
-            else:
-                clusters[true_label] = entry
-
-        cluster_list = [{
-            **clusters[c],
-            'name': c,
-            'idx': idx} for idx, c in enumerate(clusters)]
-        cluster_list = sorted(cluster_list, key=lambda x: -x['frac'])
-
-        display_list = []
-        # show unknown clusters first
-        for i, cluster in enumerate(cluster_list):
-            if cluster['name'][0:3] == "UNK":
-                save_file = os.path.join(self.save_dir,
-                                        f"wordcloud-{cluster['name']}.png")
-                show_wordcloud(i, cluster, save_file, save_only=True)
-                display_list.append(cluster)
-
-        # next show known clusters
-        for i, cluster in enumerate(cluster_list):
-            if cluster['name'][0:3] != "UNK":
-                save_file = os.path.join(self.save_dir,
-                                        f"wordcloud-{cluster['name']}.png")
-                show_wordcloud(i, cluster, save_file, save_only=True)
-                display_list.append(cluster)
-
-        
-        self.output(write_results_page(display_list, self.save_dir, self.run_name))
-
-
-    def visualise_tsne(self):
-        tsne = TSNE(
-                n_components=2,
-                verbose=1,
-                random_state=123,
-                n_iter=300,
-                learning_rate='auto')
-        x_enc = self.encoder.predict(self.x)
-        z = tsne.fit_transform(x_enc)
-        df_tsne = pd.DataFrame()
-        df_tsne["y"] = self.y_pred
-        df_tsne["comp-1"] = z[:,0]
-        df_tsne["comp-2"] = z[:,1]
-        plt.figure(figsize=(18,14))
-        sns.scatterplot(x="comp-1", y="comp-2", hue=df_tsne.y.tolist(),
-                palette=sns.color_palette(
-                        "hls",
-                        len(ENTITY_FILTER_LIST)),
-                data=df_tsne).set(title="Labelled embeddings T-SNE projection") 
-
-    
-    def visualise_umap(self, sample:int=1000, embs:str="z"):
-        if embs == "z":
-            # encoder output
-            z_enc = self.encoder.predict(self.x)
-        elif embs == "x":
-            # raw BERT embeddings
-            z_enc = self.x
-        indices = np.random.choice(z_enc.shape[0], sample, replace=False)
-        labels = self.y_pred[indices]
-        labels = np.asarray(
-            [(self.mapping[l] if l in self.mapping else l) for l in labels ])
-        z_sample = z_enc[indices]
-        mapper = umap.UMAP(metric='manhattan').fit(z_sample)
-        import umap.plot as plt_u
-        plt_u.points(mapper, labels=labels)
-    
+            out_dir = self.save_dir
     
     
 
