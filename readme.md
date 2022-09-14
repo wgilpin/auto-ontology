@@ -19,6 +19,8 @@ run the `process_pdfs.py` script from the project folder:
 
 You will now have a file, `lines.txt` in the chosen folder. Copy / move it to the folder `./src/pdfs`, relative to the project folder.
 
+## Deep Cluster
+
 Next, as exemplified in the file `pdfs_notebook.ipynb`, run the following code:
 
 ```python
@@ -34,7 +36,29 @@ dc = DeepCluster(
 dc.train_and_evaluate_model(10000, verbose=1, folder="pdfs/lines.txt")
 ```
 
-or to use the latent representation network:
+Initialisation options include:
+
+* `run_name`: the folder name for saving results
+* `train_size`: how many smaples to use for training
+* `num_clusters`: how many clusters do we want produced?
+* `cluster`: the clustering algorithm for seeding
+  * `Kmeans` for k-means
+  * `GMM` for Gaussian Mixture Methods
+  * `OPTICS`
+  * `agg` for agglomerative clustering
+* `entities`: optional list of spaCy entity labels for find
+* `entity_count`: how man entity classes to find. Don't use with `entities`
+* `dims`: optional list of numbers - the sizes of each layer in the encoder.
+* `loss_weights`: optional list of 3 weights [0.0-1.0] for the losses used
+  * `KL` divergence
+  * `Mean` Squared Error
+  * `Cluster` accuracy loss
+* `maxiter`: how many iterations to train
+* `verbose`: 0 is quiet, 1 is verbose, 2 is very verbose
+
+## Deep Latent Representation
+
+To use the latent representation network:
 
 ```python
 from deep_latent import DeepLatentCluster
