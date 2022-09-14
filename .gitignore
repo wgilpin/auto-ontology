@@ -5,6 +5,7 @@ results/
 model/
 *.log
 logs/
+pdfs/
 
 # numpy state files
 *.npy
