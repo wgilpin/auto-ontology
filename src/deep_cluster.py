@@ -467,6 +467,53 @@ class DeepCluster():
         self.output(f"Loading model weights from {model_weights_file}")
         self.model.load_weights(model_weights_file)
 
+    def evaluate_model(
+                    self,
+                    eval_size: int,
+                    verbose:int=1,
+                    radius:int=6,
+                    folder: Optional[str]=None,
+                    output: Optional[str]=None) -> dict:
+        """
+        Run the model.
+        """
+        self.verbose = verbose
+
+        if self.train_size != eval_size or self.x is None:
+            self.output("Load Data")
+            self.x, self.y, self.mapping, self.strings = load_data(
+                                                            eval_size,
+                                                            get_text=True,
+                                                            oversample=False,
+                                                            verbose=verbose,
+                                                            radius=radius,
+                                                            train=False,
+                                                            folder=folder)
+            assert self.mapping is not None
+            self.output("Data Loaded")
+
+        self.make_load_model()
+
+        self.output("Predicting")
+
+        q, _ = self.model.predict(self.x, verbose=0)
+        self.output("Predicted")
+        self.y_pred = q.argmax(1)
+
+        raw_sample = DataFrame({
+            'text': self.strings,
+            'y_true': self.y,
+            'y_pred': self.y_pred,
+        })
+
+        # create output folder if needed
+        if output is not None:
+            out_dir = f"./results/{output}"
+            if not os.path.exists(out_dir):
+                # create save dir
+                os.makedirs(out_dir)
+        else:
+            out_dir = self.save_dir
 
         return do_evaluation(
             raw_sample, self.mapping, self.verbose, out_dir, self.run_name)
