@@ -1,5 +1,6 @@
 # %%
 
+from importlib.resources import path
 import os
 import pickle
 import logging
@@ -51,13 +52,24 @@ def read_conll_dataset(filename: str) -> list[list]:
     Reads the CONLL dataset.
     """
     data = []
-    with open(f"{filename}", 'r') as f:
+    with open(filename, 'r', encoding='utf-8') as f:
         for line in f:
             line = line.strip()
             if line:
                 data.append(line.split())
     return data
 
+def read_text_dataset(filename: str) -> list[list]:
+    """
+    Reads a text dataset.
+    """
+    data = []
+    with open(filename, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                data.append(line)
+    return data
 
 def parse_conll(data: list) -> list[dict]:
     """
@@ -180,6 +192,9 @@ def pre_embed(dataset: str,
     elif dataset == "fewNERD":
         logging.info("Reading fewNERD dataset")
         sentences = read_fewNERD_sentences(length)
+    elif path.exists(dataset):
+        lines = read_conll_dataset(dataset)
+        sentences = lines[:length]
     else:
         raise ValueError("Unknown dataset")
     result = []
@@ -264,6 +279,14 @@ def get_training_data(
             merged = training_data_from_embeds_spacy(df,
                                                      radius=radius,
                                                      )
+        elif os.path.exists(source):
+            logging.info("Reading %s", source)
+            df = pre_embed(source)
+            if count > 0:
+                df = df[0:count]
+            merged = training_data_from_embeds_spacy(df,
+                                                     radius=radius,
+                                                     )
         else:
             raise ValueError("Unknown dataset")
 
@@ -294,13 +317,19 @@ def load_data(
         oversample: bool=True,
         verbose:int=1,
         radius: int=0,
-        train:bool=True) -> Tuple[np.ndarray, np.ndarray, dict, list[str]]:
+        train:bool=True,
+        folder:Optional[str]=None) -> Tuple[np.ndarray, np.ndarray, dict, list[str]]:
     """
     Load data from disk
     Arguments:
         -size: number of rows to load
         -entity_filter: list of entities to filter on
         -get_text: whether to get the text as well
+        -oversample: whether to oversample the minority classes
+        -verbose: how much to print, 0 is none
+        -radius: how many words to include in the context either side of span
+        -train: whether to load training data
+        -folder: folder to load from, no slashes, will be relative to src
     Returns:
         -x: training data
         -y: training labels
@@ -311,8 +340,12 @@ def load_data(
         entity_filter = []
     ds_name = ''if train else '_test'
 
-    filename_data = f"./data/conll_spacy_n{size}_r{radius}{ds_name}.pkl"
-    filename_mapping = f"./data/conll_spacy_n{size}_r{radius}{ds_name}_map.pkl"
+    if folder is not None:
+        filename_data = f"./{folder}_n{size}_r{radius}{ds_name}.pkl"
+        filename_mapping = f"./{folder}_n{size}_r{radius}{ds_name}_map.pkl"
+    else:
+        filename_data = f"./data/conll_spacy_n{size}_r{radius}{ds_name}.pkl"
+        filename_mapping = f"./data/conll_spacy_n{size}_r{radius}{ds_name}_map.pkl"
     if os.path.exists(filename_data) and os.path.exists(filename_mapping):
         output(f"Loading {filename_data}", verbose)
         trg = pd.read_pickle(filename_data)
@@ -320,15 +353,20 @@ def load_data(
             mapping = pickle.load(handle)
             output(verbose=verbose, s=f"LOADED {mapping}")
     else:
-        print("Creating data")
-        sample_conll = get_sample_conll_hf(size, train=train)
-        sample_name = f"conll_n{size}_{'train' if train else 'test'}"
+        print(f"Creating {ds_name} data")
+        if folder is not None:
+            lines = read_text_dataset(f"./{folder}")
+            sample_text = lines[:size]
+            sample_name = f"pdf_n{size}_{'train' if train else 'test'}"
+        else:
+            sample_text = get_sample_conll_hf(size, train=train)
+            sample_name = f"conll_n{size}_{'train' if train else 'test'}"
 
         embedder = TrainingDataSpacy(
             embed_sentence_level=True,
             radius=radius)
         trg, mapping = embedder.get_training_data_spacy(
-                                                sents=sample_conll,
+                                                sents=sample_text, # type: ignore
                                                 name = sample_name)
         trg.to_pickle(filename_data)
         with open(filename_mapping, 'wb') as handle:
