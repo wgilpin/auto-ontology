@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 import os
 import math
 from typing import Optional
@@ -19,91 +18,18 @@ from tensorflow.keras.optimizers import SGD
 from tensorflow.keras.initializers import VarianceScaling
 from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.metrics import pairwise
-from sklearn.cluster import KMeans, DBSCAN, OPTICS, AgglomerativeClustering
-from sklearn import mixture
-from scipy.stats import multivariate_normal
+
 
 from data import load_data
 from timer import timer
-from cluster_metrics import eval_cluster, show_core_metrics, score_clusters, save_scores
+from cluster_metrics import do_evaluation, eval_cluster, show_core_metrics,\
+    score_clusters, save_scores, do_clustering
 
 warnings.filterwarnings("ignore")
 
 ENTITY_FILTER_LIST = ['GPE', 'PERSON', 'ORG', 'DATE', 'NORP',
                       'TIME', 'PERCENT', 'LOC', 'QUANTITY', 'MONEY', 'FAC', 'CARDINAL',
                       'EVENT', 'PRODUCT', 'WORK_OF_ART', 'ORDINAL', 'LANGUAGE']
-
-
-def do_clustering(
-        clustering: str,
-        n_clusters: int,
-        z_state: DataFrame,
-        params: dict) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Perform clustering on the data.
-        -clustering: the clustering algorithm to use
-        -n_clusters: the number of clusters to use
-        -z_state: the data to cluster
-        -params: dict, optional
-            'eps' or 'min_samples' values for DBSCAN/OPTICS
-    Returns:
-        - the cluster assignments
-        - cluster centers
-    """
-    dbscan_eps = 1
-    dbscan_min_samples = 5
-    min_cluster_size = 15
-    if 'eps' in params:
-        dbscan_eps = params['eps']
-    if 'min_samples' in params:
-        dbscan_min_samples = params['min_samples']
-    if 'min_cluster_size' in params:
-        min_cluster_size = params['min_cluster_size']
-
-    if clustering == 'GMM':
-        gmix = mixture.GaussianMixture(
-            n_components=n_clusters,
-            covariance_type='full',
-            verbose=params['verbose'])
-        gmix.fit(z_state)
-        y_pred = gmix.predict(z_state)
-        # get centres
-        centers = np.empty(shape=(gmix.n_components, z_state.shape[1]))
-        for i in range(gmix.n_components):
-            density = multivariate_normal(
-                cov=gmix.covariances_[i],
-                mean=gmix.means_[i]).logpdf(z_state)
-            centers[i, :] = z_state[np.argmax(density)]
-    elif clustering == 'Kmeans':
-        kmeans = KMeans(n_clusters=n_clusters, n_init=10,
-                        verbose=params['verbose'])
-        y_pred = kmeans.fit_predict(z_state)
-        centers = kmeans.cluster_centers_
-    elif clustering == 'DBSCAN':
-        dbscan = DBSCAN(
-            eps=dbscan_eps,
-            min_samples=dbscan_min_samples,
-            metric='manhattan')
-        y_pred = dbscan.fit_predict(z_state)
-        centers = np.zeros((len(np.unique(y_pred))))
-    elif clustering == 'OPTICS':
-        optics = OPTICS(
-            min_samples=dbscan_min_samples,
-            min_cluster_size=min_cluster_size,
-            metric='cosine')
-        y_pred = optics.fit_predict(z_state)
-        centers = np.zeros((len(np.unique(y_pred))))
-    elif clustering == "agg":
-        agg = AgglomerativeClustering(
-            n_clusters=n_clusters,
-            affinity='cosine',
-            linkage='complete')
-        y_pred = agg.fit_predict(z_state)
-        centers = None
-    else:
-        raise ValueError('Clustering algorithm not specified/unknown.')
-
-    return y_pred, centers  # type: ignore
 
 
 def make_q(z, batch_size, alpha):
@@ -705,53 +631,19 @@ class DeepLatentCluster():
         # z is the latent space
         z_sample = self.predict(sample_size, head)
 
-        return self.do_evaluation(z_sample)
-
-    def do_evaluation(self, z_sample):
-        """
-        Evaluate the model.
-        - z_sample: the latent space
-        - y_sample: the true labels
-        - str_sample: the original strings
-        """
         # cluster the latent space using requested algorithm
-        y_pred_sample, y_label = self.apply_cluster_algo(z_sample)
-
-        self.output("CLUSTERS")
+        y_pred_sample, _ = self.apply_cluster_algo(z_sample)
 
         raw_sample = DataFrame({
             'text': self.str_sample,
             'y_true': self.y_sample,
             'y_pred': y_pred_sample,
-            'y_label': y_label,
         })
 
-        # assign labels to the clusters
         assert self.mapping is not None
-        all_clusters, clusters, cluster_f1 = eval_cluster(
-                                                raw_sample, self.mapping)
+        return do_evaluation(
+            raw_sample, self.mapping, self.verbose, self.save_dir, self.run_name)
 
-        # list of new clusters by id number
-        labels_no = {v.clus_no: k for k,v in clusters.items()}
-        labels_ent = {v.entity_id: k for k,v in clusters.items()}
-        new_labels = {**labels_no, **labels_ent}
-
-        # overall scores
-        scores_agg = show_core_metrics(
-            y_pred_sample, all_clusters, new_labels, self.mapping, self.y_sample, self.save_dir)
-
-        # cluster scores
-        cluster_list = score_clusters(
-                                clusters=clusters,
-                                save_dir=self.save_dir,
-                                mapping=self.mapping)
-
-        # output file
-        save_scores(cluster_list, scores_agg, self.save_dir, self.run_name)
-
-        scores = {**scores_agg, 'cluster F1': cluster_f1} # type: ignore
-
-        return scores
 
     def benchmark_model(self, sample_size: int = 0, verbose: int = 1) -> None:
         """
@@ -762,7 +654,18 @@ class DeepLatentCluster():
         # predict the requested sample size
         self.get_sample(sample_size)
 
-        self.do_evaluation(self.x_sample)
+        # cluster the latent space using requested algorithm
+        y_pred_sample, y_label = self.apply_cluster_algo(self.x_sample)
+
+        raw_sample = DataFrame({
+            'text': self.str_sample,
+            'y_true': self.y_sample,
+            'y_pred': y_pred_sample,
+            'y_label': y_label,
+        })
+
+        assert self.mapping is not None
+        do_evaluation(raw_sample, self.mapping, self.verbose, self.save_dir, self.run_name)
 
     def random_benchmark(self, sample_size: int = 0, verbose: int = 1) -> dict:
         """
