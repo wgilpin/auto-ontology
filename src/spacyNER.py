@@ -10,6 +10,7 @@ from extract_bert_features import embed, get_pipe
 from transformers import TFDistilBertModel
 from tqdm import tqdm
 from data_conll import get_sample_conll
+from process_pdfs import useful
 
 
 from timer import timer
@@ -178,7 +179,7 @@ class TrainingDataSpacy():
         self.embeddings = None
         self.data_name = ""
         self.sents = None
-
+        
     def embed_all(self):
         """
         Embeds all sentences in the data.
@@ -211,15 +212,22 @@ class TrainingDataSpacy():
         if self.embeddings is None :
             self.load_embs_cache()
         return self.embeddings[sentence_no]
-        
 
-    def embed_text(self, sent: str, sent_no: int, start: int=0, end: int=0, embeddings: list=None):
+
+    def embed_text(
+                self,
+                sent: str,
+                sent_no: int,
+                start: int=0,
+                end: int=0,
+                embeddings: Optional[list] = None
+                ) -> np.ndarray:
         """
         embeds a sentence and returns the embedding
         """
         if self.embed_sentence_level:
             # embed whole sentence, then return appropriate part
-            if embeddings is None:
+            if embeddings is None or len(embeddings)==0:
                 embeddings = self.cached_sent_embed(sent_no)
             return np.mean(embeddings[start+1:end+1], axis=0)
         else:
@@ -233,7 +241,7 @@ class TrainingDataSpacy():
             doc,
             span,
             is_entity: bool,
-            embeddings: list) -> dict:
+            embeddings: Optional[list]) -> dict:
         """
         Returns a dict with the following keys:
             - sentence: str
@@ -265,6 +273,11 @@ class TrainingDataSpacy():
             "embedding": embedding,
         }
 
+    @staticmethod
+    def useful(s:str):
+        """Filter out chunks that are not useful"""
+        return len(s) > 2 and sum(c.isalpha() for c in s) > 2
+
     def embed_sentence(self, sent, sent_no: int) -> list[dict]:
         """
         Returns a list of embeddings for each chunk or entity in the sentence
@@ -276,10 +289,15 @@ class TrainingDataSpacy():
             # add any noun chunks and their entities
             if str(nc).lower() in self.skip_chunks:
                 continue
-            if embs is None and self.embed_sentence_level:
+            if not useful(str(nc)):
+                continue
+            if str(nc).lower() in self.nlp.Defaults.stop_words:
+                continue
+            if embs is not None and self.embed_sentence_level:
                 # calculate embeddings once for whole sentence
                 embs = self.cached_sent_embed(sent_no)
-            item = self.embed_chunk(sent_no, s, nc, is_entity=False, embeddings=embs)
+            item = self.embed_chunk(
+                sent_no, s, nc, is_entity=False, embeddings=embs)
             res.append(item)
             for ent in nc.ents:
                 if ent.start >= nc.start and ent.end <= nc.end:
