@@ -67,8 +67,10 @@ class DeepLatentCluster():
         self.x_sample = None
         self.y_sample = None
         self.str_sample = None
+        self.shorts_sample = None
         self.mapping: Optional[dict] = None
         self.strings: list[str] = []
+        self.shorts: list[str] = []
         self.y_pred_last = None
         self.input_dim = 768
         self.batch_size = 256
@@ -501,7 +503,7 @@ class DeepLatentCluster():
         """
         if self.config['train_size'] != sample_size or self.x_sample is None:
             self.output("Load Data ")
-            self.x, self.y, self.mapping, self.strings = load_data(
+            self.x, self.y, self.mapping, self.strings, self.shorts = load_data(
                 0,
                 get_text=True,
                 verbose=self.verbose,
@@ -514,17 +516,20 @@ class DeepLatentCluster():
                 self.x.shape[0], sample_size, replace=False)
             y_sample = self.y[sample_idx]
             str_sample = self.strings[sample_idx]
+            shorts_sample = self.shorts[sample_idx]
             x_sample = self.x[sample_idx]
         else:
             x_sample = self.x
             y_sample = self.y
             str_sample = self.strings
+            shorts_sample = self.shorts
 
         self.x_sample = x_sample
         self.y_sample = y_sample
         self.str_sample = str_sample
+        self.shorts_sample = shorts_sample
 
-    def predict(self, sample_size: int, head: str):
+    def predict(self, head: str):
         """
         Make predictions for the given sample size.
         Sample will be from Test dataset not Train data
@@ -537,7 +542,6 @@ class DeepLatentCluster():
             head = 'z'
         self.output(f"Using [{head}] head for predictions")
 
-        self.get_sample(sample_size)
 
         # predict z space
         assert self.x_sample is not None
@@ -627,9 +631,11 @@ class DeepLatentCluster():
 
         self.make_load_model(load_dir)
 
+        self.get_sample(sample_size)
+
         # predict the requested sample size
         # z is the latent space
-        z_sample = self.predict(sample_size, head)
+        z_sample = self.predict(head)
 
         # cluster the latent space using requested algorithm
         y_pred_sample, _ = self.apply_cluster_algo(z_sample)
@@ -638,6 +644,7 @@ class DeepLatentCluster():
             'text': self.str_sample,
             'y_true': self.y_sample,
             'y_pred': y_pred_sample,
+            'shorts': self.shorts_sample
         })
 
         assert self.mapping is not None
@@ -655,13 +662,13 @@ class DeepLatentCluster():
         self.get_sample(sample_size)
 
         # cluster the latent space using requested algorithm
-        y_pred_sample, y_label = self.apply_cluster_algo(self.x_sample)
+        y_pred_sample, _ = self.apply_cluster_algo(self.x_sample)
 
         raw_sample = DataFrame({
             'text': self.str_sample,
             'y_true': self.y_sample,
             'y_pred': y_pred_sample,
-            'y_label': y_label,
+            'shorts': self.shorts_sample,
         })
 
         assert self.mapping is not None
@@ -677,13 +684,13 @@ class DeepLatentCluster():
         self.get_sample(sample_size)
 
         # cluster the latent space using requested algorithm
-        y_pred_sample, y_label = self.apply_cluster_algo(self.x_sample)
+        y_pred_sample, _ = self.apply_cluster_algo(self.x_sample)
 
         sample = DataFrame({
             'text': self.str_sample,
             'y_true': self.y_sample,
             'y_pred': y_pred_sample,
-            'y_label': y_label,
+            'shorts': self.shorts_sample,
         })
 
         # assign labels to the clusters

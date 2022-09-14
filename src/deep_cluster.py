@@ -485,7 +485,7 @@ class DeepCluster():
 
         if self.train_size != eval_size or self.x is None:
             self.output("Load Data")
-            self.x, self.y, self.mapping, self.strings = load_data(
+            self.x, self.y, self.mapping, self.strings, self.shorts = load_data(
                                                             eval_size,
                                                             get_text=True,
                                                             oversample=False,
@@ -508,6 +508,7 @@ class DeepCluster():
             'text': self.strings,
             'y_true': self.y,
             'y_pred': self.y_pred,
+            'shorts': self.shorts,
         })
 
         # create output folder if needed
