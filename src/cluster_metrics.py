@@ -130,7 +130,7 @@ def summarise_scores(scores: list[dict]) -> None:
     # add up each group
     for group, scores in groups.items():
         for score in scores:
-            results[group]['cluster_f1'] += score['cluster_f1']
+            results[group]['cluster_f1'] += score['cluster F1']
             results[group]['f1'] += score['f1']
             results[group]['precision'] += score['precision']
             results[group]['recall'] += score['recall']
@@ -399,7 +399,7 @@ def show_core_metrics(y_pred_sample, all_clusters, new_labels, mapping, y_sample
     print(f"Accuracy = {accuracy:.4f}")
     print(f"Precision = {precision:.4f}")
     print(f"Recall = {recall:.4f}")
-    print(f"New clusters = {num_new_large:6d}")
+    print(f"New clusters = {num_new_large}")
     scores = {
         'f1': f1,
         'acc': accuracy,
