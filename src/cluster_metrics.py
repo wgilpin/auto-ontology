@@ -582,6 +582,7 @@ def do_evaluation(
     assert 'text' in sample.columns
     assert 'y_true' in sample.columns
     assert 'y_pred' in sample.columns
+    assert 'shorts' in sample.columns
 
     if verbose>0:
         print("CLUSTERS")
