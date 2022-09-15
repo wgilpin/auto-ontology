@@ -117,7 +117,18 @@ def join_punctuation(seq, characters=".,;?!'')-"):
 # CREATE TRAINING DATA
 
 
-def test_train_split(df, frac=1.0, oversample: bool=True, verbose:int=1):
+def test_train_split(
+        df,
+        frac=1.0,
+        oversample: bool=True,
+        verbose:int=1
+        ) -> Tuple[
+                np.ndarray,
+                np.ndarray,
+                np.ndarray,
+                np.ndarray,
+                np.ndarray,
+                np.ndarray]:
     """
     Returns a balanced train and test split of the dataframe
     -X train
@@ -372,7 +383,7 @@ def load_data(
             if size == 0:
                 sample_text = lines
             else:
-            sample_text = lines[:size]
+                sample_text = lines[:size]
             sample_name = f"pdf_n{size}_{'train' if train else 'test'}"
         else:
             sample_text = get_sample_conll_hf(size, train=train)
