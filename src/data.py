@@ -369,6 +369,9 @@ def load_data(
         print(f"Creating {ds_name} data")
         if folder is not None:
             lines = read_text_dataset(f"./{folder}")
+            if size == 0:
+                sample_text = lines
+            else:
             sample_text = lines[:size]
             sample_name = f"pdf_n{size}_{'train' if train else 'test'}"
         else:
