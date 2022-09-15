@@ -131,7 +131,7 @@ def test_train_split(df, frac=1.0, oversample: bool=True, verbose:int=1):
         testing_data = df.drop(training_data.index)
         test_y_df = np.array(testing_data["label"])
         test_x_df = np.array(testing_data.drop(
-            columns=['chunk', 'label', 'label_id', 'sentence']))
+            columns=['chunk', 'label', 'label_id', 'sentence', 'short_chunk']))
         train_y_df = np.array(training_data["label"])
         logging.info("Test df: %s", test_x_df.shape)
     else:
@@ -155,11 +155,23 @@ def test_train_split(df, frac=1.0, oversample: bool=True, verbose:int=1):
         ros = RandomOverSampler(random_state=42)
         train_x_df, train_y_df = ros.fit_resample(train_x_df, train_y_df) # type: ignore
     train_x_strings = train_x_df['chunk']
+    train_x_shorts = train_x_df['short_chunk']
     train_x_df = np.array(train_x_df.drop(
-        columns=['chunk', 'label', 'label_id', 'sentence']))
+        columns=['chunk', 'label', 'label_id', 'sentence', 'short_chunk']))
 
     logging.info("Train df: %s", train_x_df.shape)
-    return train_x_df, test_x_df, train_y_df, test_y_df, train_x_strings
+    assert train_x_df is not None
+    assert train_y_df is not None
+    assert train_x_strings is not None
+    assert train_x_shorts is not None
+    res = (
+        train_x_df,
+        test_x_df,
+        train_y_df,
+        test_y_df,
+        train_x_strings,
+        train_x_shorts)
+    return res
 
 
 def get_sentences_from_conll():
@@ -318,7 +330,8 @@ def load_data(
         verbose:int=1,
         radius: int=0,
         train:bool=True,
-        folder:Optional[str]=None) -> Tuple[np.ndarray, np.ndarray, dict, list[str]]:
+        folder:Optional[str]=None) -> Tuple[
+                        np.ndarray, np.ndarray, dict, list[str], list[str]]:
     """
     Load data from disk
     Arguments:
@@ -386,7 +399,7 @@ def load_data(
 
     output(f'Loaded file: {trg.shape[0]} samples', verbose)
 
-    x, _, y, _, strings = test_train_split(trg, oversample=oversample, verbose=verbose)
+    x, _, y, _, strings, shorts = test_train_split(trg, oversample=oversample, verbose=verbose)
     x = x.astype('float32')
     y = y.astype('float32')
     if oversample:
@@ -400,4 +413,4 @@ def load_data(
     y = np.unique(y, return_inverse = True)[1]
     output(filtered_map, verbose)
 
-    return x, y, filtered_map, strings if get_text else None
+    return x, y, filtered_map, strings, shorts
