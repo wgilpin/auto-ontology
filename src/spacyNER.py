@@ -179,7 +179,7 @@ class TrainingDataSpacy():
         self.embeddings = None
         self.data_name = ""
         self.sents = None
-        
+
     def embed_all(self):
         """
         Embeds all sentences in the data.
@@ -271,6 +271,7 @@ class TrainingDataSpacy():
             "label_n": span.label if is_entity else 0,
             "label_id": span.label_ if is_entity else 'UNKNOWN',
             "embedding": embedding,
+            "short_chunk": str(span),
         }
 
     @staticmethod
@@ -336,7 +337,7 @@ class TrainingDataSpacy():
         emb_df = pd.DataFrame(np.stack([m["embedding"] for m in res]))
         rest_df = pd.DataFrame(res).drop('embedding', axis=1)
         df = pd.concat([emb_df, rest_df], axis=1)
-        
+
         df['label'] = np.unique(df['label_n'], return_inverse=True)[1]+1
         for _, row in df.iterrows():
             mapping[row['label']] = row['label_id']
