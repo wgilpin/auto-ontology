@@ -76,7 +76,7 @@ dc.train_model()
 dc.evaluate_model('test-latent-all', sample_size=4000)
 ```
 
-`DeepLatentCluster` has many configuration options that can be supplied to the `config` param in dictionary form. For a comprehensive list, see the class init method, by common ones include:
+`DeepLatentCluster` has many configuration options that can be supplied to the `config` param in dictionary form. For a comprehensive list, see the class init method, but common ones include:
 
 * `train_size`: how many samples to include
 * `reconstr_weight`: weight applied to loss from the autoencoder reconstruction
