@@ -209,9 +209,9 @@ def rearrange_clusters(
         frac = y_tru_frac_by_clus[clus_no][prob_ent]
 
         # wordcloud
-        freqs = get_freqs(cluster['text'].values)
+        freqs = get_freqs(cluster['shorts'].values)
         unknown_cluster = cluster[cluster['y_true'] == 0]
-        freqs_unknown = get_freqs(unknown_cluster['text'].values)
+        freqs_unknown = get_freqs(unknown_cluster['shorts'].values)
         class_freqs, _ = freqs_descending(cluster, 'y_true')
         entry = Cluster(
             freqs=freqs,
