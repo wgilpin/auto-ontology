@@ -251,6 +251,9 @@ def rearrange_clusters(
             (sample['y_true'] == prob_ent),
             'y_pred_new'] = prob_ent
 
+    for k, v in clusters.items():
+        v.name = k
+
     return sample, clusters
 
 def show_wordcloud(
