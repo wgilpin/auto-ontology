@@ -3,25 +3,32 @@
 For detailed descriptions and full references see 
 https://github.com/wgilpin/project/blob/master/ProjectReport.pdf
 
-To process a set of pdfs:
+To process a set of files:
 
 Makes a folder `pdfs` under the top-level project folder.
 
-Place pdfs in that folder.
+Place files in that folder. They can be any of the ~2000 types suported by Apache Tika:
+https://tika.apache.org/0.9/formats.html 
 
-run the `process_pdfs.py` script from the project folder:
+run the `process_files.py` script from the project folder:
 
 ```
-> python process_pdfs.py
+> python process_files.py
 ```
 
-`process_pdfs.py` can take an optional parameter with a folder name, which needs to exist under the project folder.
+`process_files.py` can take an optional parameter with a folder name, which needs to exist under the project folder.
 
 You will now have a file, `lines.txt` in the chosen folder. Copy / move it to the folder `./src/pdfs`, relative to the project folder.
 
+For more information, execute
+
+```
+> python process_files.py --help
+```
+
 ## Deep Cluster
 
-Next, as exemplified in the file `pdfs_notebook.ipynb`, run the following code:
+Next, as per the file `pdfs_notebook.ipynb`, run the following code:
 
 ```python
 from deep_cluster import DeepCluster
