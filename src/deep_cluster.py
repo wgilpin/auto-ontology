@@ -1,21 +1,23 @@
+# Author: William Gilpin, 2022
+#
+# Derived in part from 
+#           https://github.com/XifengGuo/DEC-keras/blob/master/DEC.py
+#           Author: Xifeng Guo
 
 import os
 from typing import Optional
 import warnings
-import umap
-import umap.plot as plt_u
 import numpy as np
 import tensorflow.keras.backend as k
-import matplotlib.pyplot as plt
-from pandas import DataFrame
-from IPython.display import Image
-from tensorflow.keras import models
-from keras.utils import plot_model
 from tensorflow.keras.layers import Dense, Input, Layer, InputSpec
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import SGD
 from tensorflow.keras.initializers import VarianceScaling
 from tensorflow.keras.callbacks import EarlyStopping
+import matplotlib.pyplot as plt
+from pandas import DataFrame
+from IPython.display import Image
+from keras.utils import plot_model
 from sklearn.metrics import normalized_mutual_info_score, adjusted_rand_score
 
 from cluster_metrics import cluster_loss, do_clustering, acc, do_evaluation
@@ -112,6 +114,7 @@ class ClusteringLayer(Layer):
         self.x_sample = None
         self.y_sample = None
         self.str_sample = None
+        self.shorts = None
         self.mapping: Optional[dict] = None
 
     def build(self, input_shape):
@@ -154,11 +157,11 @@ class ClusteringLayer(Layer):
     def compute_output_shape(self, input_shape):
         """ Shape of the layer's output."""
         assert input_shape and len(input_shape) == 2
-        return input_shape[0], self.num_clusters
+        return input_shape[0], self.config['num_clusters']
 
     def get_config(self):
         """Get layer configuration."""
-        config = {'n_clusters': self.num_clusters}
+        config = {'n_clusters': self.config['num_clusters']}
         base_config = super(ClusteringLayer, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
@@ -183,50 +186,53 @@ class DeepCluster():
     def __init__(
                 self,
                 run_name: str,
-                train_size: int,
-                num_clusters: int,
-                cluster: str="GMM",
-                entities: Optional[list[str]]=None,
-                entity_count: int=0,
-                dims: Optional[list[int]] = None,
-                loss_weights: Optional[list[float]] = None,
-                maxiter:int=8000,
                 verbose: int=1,
+                config: Optional[dict]=None,
                 ):
-
-        self.cluster = cluster
-        self.num_clusters = num_clusters
-        self.y_pred = None
-
-        if entities is not None and entity_count > 0:
-            raise ValueError('entities and entity_count cannot both be specified')
-        if entities is None:
-            if entity_count==0:
-                self.entities = ENTITY_FILTER_LIST
-            else:
-                self.entities = ENTITY_FILTER_LIST[:entity_count]
-        else:
-            self.entities = entities
 
         self.x = None
         self.y = None
+        self.y_pred = None
+        self.y_pred_last = None
         self.mapping = None
         self.strings = None
-        self.y_pred_last = None
+        self.shorts = None
         self.input_dim = 768
-        self.batch_size = 256
 
-        self.dims = [768, 500, 500, 2000, 100] if dims is None else dims
-        self.loss_weights = [0.3, 1.0, 0.4] if loss_weights is None else loss_weights
-        self.loss_weights = loss_weights
         self.run_name = run_name
-        self.train_size = train_size
-        self.maxiter = maxiter
         self.model = None
         self.encoder = None
         self.autoencoder = None
         self.save_dir = ""
         self.verbose = verbose
+
+        self.config = {
+            'dims': [768, 500, 500, 2000, 40],
+            'kl_weight': 0.3,
+            'mse_weight': 1.0,
+            'acc_weight': 0.4,
+            'train_size': 0,
+            'maxiter': 8000,
+            'batch_size': 256,
+            'num_clusters': 25,
+            'cluster': "GMM",
+            'entities': None,
+            'entity_count': 15,
+            'radius': 0,
+        }
+
+        if config is not None:
+            self.config = {**self.config, **config}
+        if self.config['entities'] is not None and self.config['entity_count'] > 0:
+            raise ValueError('entities and entity_count cannot both be specified')
+        if self.config['entities'] is None:
+            if self.config['entity_count']==0:
+                self.config['entities'] = ENTITY_FILTER_LIST
+            else:
+                self.config['entities'] = ENTITY_FILTER_LIST[:self.config['entity_count']]
+        else:
+            self.config['entities'] = self.config['entities']
+
 
     def output(self, s:str)->None:
         """ Output a string to the console if verbose """
@@ -242,6 +248,9 @@ class DeepCluster():
         """
         Visualise the latent space using UMAP
         """
+        import umap # pylint: disable=import-outside-toplevel
+        import umap.plot as plt_u # pylint: disable=import-outside-toplevel
+
         self.output("Visualising")
         if name is None:
             name = "UMAP"
@@ -270,9 +279,9 @@ class DeepCluster():
                 folder: Optional[str]=None) -> None:
         """ Make the data for the model """
         self.output("Load Data")
-        self.x, self.y, self.mapping, self.strings, _ = load_data(
-                                    self.train_size,
-                                    entity_filter=self.entities,
+        self.x, self.y, self.mapping, self.strings, self.shorts = load_data(
+                                    self.config['train_size'],
+                                    entity_filter=self.config['entities'],
                                     get_text=True,
                                     oversample=oversample,
                                     folder=folder,
@@ -291,8 +300,8 @@ class DeepCluster():
         else:
             x_sample = self.x
         y_pred, centers = do_clustering(
-            'GMM' if self.cluster=='GMM' else 'Kmeans',
-            self.num_clusters,
+            'GMM' if self.config['cluster']=='GMM' else 'Kmeans',
+            self.config['num_clusters'],
             self.encoder.predict(x_sample))
         del x_sample
         self.model.get_layer(name='clustering').set_weights([centers])
@@ -301,7 +310,7 @@ class DeepCluster():
 
     def test_loss(self, y, y_pred):
         """ Calculate the loss """
-        return cluster_loss(self.cluster, self.num_clusters)(y, y_pred)
+        return cluster_loss(self.config['cluster'], self.config['num_clusters'])(y, y_pred)
 
     def make_model(self) -> None:
         """ Make the model """
@@ -309,10 +318,9 @@ class DeepCluster():
                             mode='fan_in',
                             scale=1. / 3.,
                             distribution='uniform')
-        pretrain_optimizer = 'adam'# SGD(learning_rate=1, momentum=0.9)
-
+        pretrain_optimizer = 'adam'
         self.autoencoder, self.encoder = autoencoder_model(
-                    self.dims,
+                    self.config['dims'],
                     init_fn=init,
                     verbose=self.verbose)
         self.autoencoder.compile(
@@ -320,14 +328,17 @@ class DeepCluster():
             loss=['mse'])
 
         clustering_layer = ClusteringLayer(
-                            self.num_clusters,
+                            self.config['num_clusters'],
                             alpha=0.9,
                             name='clustering')(self.encoder.output)
         self.model = Model(inputs=self.encoder.input,
                     outputs=[clustering_layer, self.autoencoder.output])
         self.model.compile(
             loss=['kld', 'mse', self.test_loss],
-            loss_weights=self.loss_weights,
+            loss_weights=[
+                self.config['kl_weight'],
+                self.config['mse_weight'],
+                self.config['acc_weight']],
             optimizer=SGD(learning_rate=0.5, momentum=0.9))
         self.output("model compiled")
 
@@ -362,7 +373,7 @@ class DeepCluster():
         history = self.autoencoder.fit(
                                 self.x,
                                 self.x,
-                                batch_size=self.batch_size,
+                                batch_size=self.config['batch_size'],
                                 epochs=pretrain_epochs,
                                 verbose=0,
                                 callbacks=[early_stopping_cb])
@@ -390,6 +401,8 @@ class DeepCluster():
         loss = 0
         index = 0
         update_interval = 140
+        if self.x is None:
+            self.make_data(oversample=True)
         index_array = np.arange(self.x.shape[0])
         tol = 0.001  # tolerance threshold to stop training
 
@@ -398,7 +411,7 @@ class DeepCluster():
         nmi = 0
         ari = 0
         p = None
-        for ite in range(int(self.maxiter)):
+        for ite in range(int(self.config['maxiter'])):
             if ite % update_interval == 0:
                 q, _ = self.model.predict(self.x, verbose=0)
                 # update the auxiliary target distribution p
@@ -423,14 +436,14 @@ class DeepCluster():
                     self.output('Reached tolerance threshold. Stopping training.')
                     break
             idx = index_array[
-                    index * self.batch_size :
-                    min((index+1) * self.batch_size, self.x.shape[0])]
+                    index * self.config['batch_size'] :
+                    min((index+1) * self.config['batch_size'], self.x.shape[0])]
             loss = self.model.train_on_batch(
                                             x=self.x[idx],
                                             y=[p[idx],
                                             self.x[idx]],
                                             reset_metrics=True,)
-            if (index + 1) * self.batch_size <= self.x.shape[0]:
+            if (index + 1) * self.config['batch_size'] <= self.x.shape[0]:
                 index = index + 1
             else:
                 index = 0
@@ -475,7 +488,7 @@ class DeepCluster():
                     self,
                     eval_size: int,
                     verbose:int=1,
-                    radius:int=6,
+                    include_unk: bool=True,
                     folder: Optional[str]=None,
                     output: Optional[str]=None) -> dict:
         """
@@ -483,16 +496,17 @@ class DeepCluster():
         """
         self.verbose = verbose
 
-        if self.train_size != eval_size or self.x is None:
+        if self.config['train_size'] != eval_size or self.x is None:
             self.output("Load Data")
-            self.x, self.y, self.mapping, self.strings, self.shorts = load_data(
-                                                            eval_size,
-                                                            get_text=True,
-                                                            oversample=False,
-                                                            verbose=verbose,
-                                                            radius=radius,
-                                                            train=False,
-                                                            folder=folder)
+            self.x, self.y, self.mapping, self.strings, self.shorts = \
+                            load_data(
+                                    eval_size,
+                                    get_text=include_unk,
+                                    oversample=False,
+                                    verbose=verbose,
+                                    radius=self.config['radius'],
+                                    train=False,
+                                    folder=folder)
             assert self.mapping is not None
             self.output("Data Loaded")
 
@@ -520,6 +534,7 @@ class DeepCluster():
         else:
             out_dir = self.save_dir
 
+        assert self.mapping is not None
         return do_evaluation(
             raw_sample, self.mapping, self.verbose, out_dir, self.run_name)
 
