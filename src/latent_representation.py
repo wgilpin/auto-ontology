@@ -6,81 +6,13 @@
 
 # %%
 
-# import os
-# import math
-# import numpy as np
-# import glob
-# from typing import Any
 import tensorflow as tf
-# import tensorflow.keras as k
-# import matplotlib.pyplot as plt
-# import metrics
-# from pandas import DataFrame, crosstab
-# from metrics import plot_confusion
-# from IPython.display import Image
-# from tensorflow.keras import models
-# from keras.utils import plot_model
-# from tqdm.notebook import trange
-# from tensorflow.keras.layers import Dense, Input, Layer, InputSpec, Dropout
-# from tensorflow.keras.models import Model
-# from tensorflow.keras.optimizers import SGD
-# from tensorflow.keras.initializers import VarianceScaling
-# from tensorflow.keras.callbacks import EarlyStopping
-# from sklearn.cluster import KMeans
-# from sklearn.metrics import (
-#             f1_score, accuracy_score, precision_score, recall_score, classification_report)
-# from data import load_data
-# from wordcloud import WordCloud
-# from timer import timer
 from grid_search import grid_search
 from deep_latent import DeepLatentCluster
-# import umap
+from cluster_metrics import summarise_scores
 
 # %%
 tf.get_logger().setLevel('ERROR')
-
-# %%
-from collections import defaultdict
-
-def summarise_scores(scores: list[dict]) -> None:
-    """
-    summarise the scores.
-    """
-    groups = defaultdict(list)
-    results = {}
-    for s in scores:
-        groups[s['run_name']].append(s)
-        results[s['run_name']] = {
-                            'cluster_f1':0.0,
-                            'f1': 0.0,
-                            'precision': 0.0,
-                            'recall': 0.0,
-                            'n': 0}
-    # add up each group
-    for group, scores in groups.items():
-        for score in scores:
-            results[group]['cluster_f1'] += score['cluster_f1']
-            results[group]['f1'] += score['f1']
-            results[group]['precision'] += score['precision']
-            results[group]['recall'] += score['recall']
-            results[group]['n'] += 1
-    # average each group
-    for group, scores in groups.items():
-        results[group]['cluster_f1'] /= len(scores)
-        results[group]['f1'] /= len(scores)
-        results[group]['precision'] /= len(scores)
-        results[group]['recall'] /= len(scores)
-
-
-    # print results
-    print(
-        f"{'Run Name':<40} {'Runs':<10} {'F1 avg':<12} {'F1 Cluster':<12} "
-        f"{'F1 Global':<12} {'Precision':<12} {'Recall':<12}")
-    for run, s in results.items():
-        print(
-            f"{run:<40} {s['n']:<10}  {(s['f1']+s['cluster_f1'])/2:<12.4f} "
-            f"{s['cluster_f1']:<12.4f} {s['f1']:<12.4f}"
-            f"{s['precision']:<12.4f} {s['recall']:<12.4f}")
 
 # %% [markdown]
 # ## Grid Search Utils
@@ -113,56 +45,33 @@ def do_run(cfg, idx, n_runs, sample_size) -> dict:
     score['run_name'] = run_name
     return score
     
-from collections import defaultdict
-
-def summarise_scores(scores: list[dict]) -> None:
-    """
-    summarise the scores.
-    """
-    groups = defaultdict(list)
-    results = {}
-    for s in scores:
-        groups[s['run_name']].append(s)
-        results[s['run_name']] = {
-                            'cluster_f1':0.0,
-                            'f1': 0.0,
-                            'precision': 0.0,
-                            'recall': 0.0,
-                            'n': 0}
-    # add up each group
-    for group, scores in groups.items():
-        for score in scores:
-            results[group]['cluster_f1'] += score['cluster F1']
-            results[group]['f1'] += score['f1']
-            results[group]['precision'] += score['precision']
-            results[group]['recall'] += score['recall']
-            results[group]['n'] += 1
-    # average each group
-    for group, scores in groups.items():
-        results[group]['cluster_f1'] /= len(scores)
-        results[group]['f1'] /= len(scores)
-        results[group]['precision'] /= len(scores)
-        results[group]['recall'] /= len(scores)
-
-
-    # print results
-    print(
-        f"{'Run Name':<40} {'Runs':<10} {'F1 avg':<12} {'F1 Cluster':<12} "
-        f"{'F1 Global':<12} {'Precision':<12} {'Recall':<12}")
-    for run, s in results.items():
-        print(
-            f"{run:<40} {s['n']:<10}  {(s['f1']+s['cluster_f1'])/2:<12.4f} "
-            f"{s['cluster_f1']:<12.4f} {s['f1']:<12.4f}"
-            f"{s['precision']:<12.4f} {s['recall']:<12.4f}")
 
 # %%
 stop
+
+# %%
+dc = DeepLatentCluster('summary', {})
+dc.make_model()
+dc.model.summary()
 
 # %% [markdown]
 # # Eval
 
 # %% [markdown]
 # ## Base model
+
+# %%
+dc = DeepLatentCluster(
+        'test-latent-all',
+        {
+            'train_size':0,
+            'reconstr_weight':1.0,
+            'latent_weight':1e-5,
+            "cluster": None,
+            "noise_factor": 0.0,
+        })
+dc.make_model()
+dc.train_model()
 
 # %%
 tf.get_logger().setLevel('ERROR')
@@ -174,7 +83,7 @@ dc = DeepLatentCluster(
             'train_size':0,
             'reconstr_weight':1.0,
             'latent_weight':1e-5,
-            "cluster": None
+            "cluster": None,
             "noise_factor": 0.0,
         })
 dc.make_model()
@@ -451,6 +360,21 @@ dc = DeepLatentCluster(
 # dc.make_model()
 # dc.train_model()
 dc.benchmark_model(sample_size=4000, verbose=0)
+
+# %%
+%%time
+# benchmark with cluster rearrangement
+
+dc = None
+dc = DeepLatentCluster(
+    'benchmark-10k-with-rearrange-2',
+    {
+        'train_size':0,
+        "cluster": "Kmeans"
+    })
+dc.make_model()
+dc.train_model()
+dc.benchmark_model(sample_size=2000, verbose=0)
 
 # %%
 dc.visualise_umap(dc.x_sample, dc.y_sample, to_dir=False)
@@ -1703,5 +1627,226 @@ config = {
 scores = grid_search(config, do_run, sample_size=3000)
 
 summarise_scores(scores)
+
+# %%
+from grid_search import grid_search
+
+scores = []
+num_runs = 1
+config = {
+    'train_size': [0],
+    "radius": [6],
+    'latent_weight': [0.001],
+    'reconstr_weight': [1.0],
+    'head': ['enc'],
+    'epochs': [10],
+    'cluster': ['Kmeans'],
+    'latent_loss': ['cross_entropy'],
+    'entity_count': [15],
+    'noise_factor': [0.2], 
+}
+
+scores = grid_search(config, do_run, sample_size=4000)
+
+summarise_scores(scores)
+
+# %%
+# Dahal weights
+
+from grid_search import grid_search
+
+scores = []
+num_runs = 1
+config = {
+    'train_size': [0],
+    "radius": [6],
+    'latent_weight': [0.0001],
+    'reconstr_weight': [1.0],
+    'head': ['enc'],
+    'epochs': [10],
+    'cluster': ['Kmeans'],
+    'latent_loss': ['cross_entropy'],
+    'entity_count': [15],
+    'noise_factor': [0.2], 
+}
+
+scores = grid_search(config, do_run, sample_size=4000)
+
+summarise_scores(scores)
+
+# %%
+
+
+# %% [markdown]
+# # Cluster separation
+
+# %%
+from sklearn.manifold import TSNE
+from pandas import DataFrame
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+
+def visualise_tsne(x, y):
+    tsne = TSNE(
+            n_components=2,
+            verbose=1,
+            random_state=123,
+            n_iter=600,
+            learning_rate='auto')
+    z = tsne.fit_transform(x)
+    df_tsne = DataFrame()
+    df_tsne["y"] = y
+    df_tsne["comp-1"] = z[:,0]
+    df_tsne["comp-2"] = z[:,1]
+    plt.figure(figsize=(18,14))
+    sns.scatterplot(x="comp-1", y="comp-2", hue=df_tsne.y.tolist(),
+            palette=sns.color_palette(
+                    "hls",
+                    len(np.unique(y))),
+            data=df_tsne).set(title="Labelled embeddings T-SNE projection") 
+
+# %%
+run_name = f'test-latent-noise-15-ents-r6-Kmeans-enc'
+print('-'*50)
+print(f"{run_name}")
+print('-'*50)
+
+dc = None
+dc = DeepLatentCluster(
+    run_name,
+    {
+        'train_size':0,
+        "radius": 6,
+        'verbose': 0,
+    })
+dc.make_model(verbose=0)
+
+# get sample and predict
+z_sample = dc.predict(4000, 'enc')
+
+# visualise the raw sample
+visualise_tsne(dc.x_sample, dc.y_sample)
+
+y_pred, _ = dc.apply_cluster_algo(z_sample)
+
+# visualise the predicted sample
+visualise_tsne(z_sample, y_pred)
+
+# visualise the predicted sample
+visualise_tsne(z_sample, dc.y_sample)
+
+
+# %%
+# Dahal weights, no noise
+
+from grid_search import grid_search
+
+scores = []
+num_runs = 3
+config = {
+    'train_size': [0],
+    "radius": [6],
+    'latent_weight': [0.0001],
+    'reconstr_weight': [1.0],
+    'head': ['enc'],
+    'epochs': [10],
+    'cluster': ['Kmeans'],
+    'latent_loss': ['cross_entropy'],
+    'tolerance': [1e-7, 1e-8, 1e-9, 0],
+    'entity_count': [15],
+    'noise_factor': [0.0], 
+}
+
+scores = grid_search(config, do_run, sample_size=4000)
+
+summarise_scores(scores)
+
+# %%
+# Dahal weights, no noise
+
+from grid_search import grid_search
+
+scores = []
+num_runs = 1
+config = {
+    'train_size': [1000],
+    "radius": [6],
+    'latent_weight': [0.0001],
+    'reconstr_weight': [1.0],
+    'head': ['enc'],
+    'epochs': [1],
+    'cluster': ['Kmeans'],
+    'latent_loss': ['cross_entropy'],
+    'tolerance': [1e-7],
+    'entity_count': [15],
+    'noise_factor': [0.0], 
+}
+
+scores = grid_search(config, do_run, sample_size=1000)
+
+summarise_scores(scores)
+
+# %%
+run_name = 'test-kmeans-high-alpha-enc'
+print('-'*50)
+print(f"{run_name}")
+print('-'*50)
+
+dc = None
+dc = DeepLatentCluster(
+    run_name,
+    {
+        'train_size':0,
+        'reconstr_weight':0.75,
+        'latent_weight':1.0,
+        "cluster": 'Kmeans',
+        "entity_count": 15,
+        "noise_factor": 0.6,
+        "head": "enc",
+        "radius": 6,
+        "alpha1": 80,
+    })
+
+score = dc.evaluate_model(
+        run_name,
+        head='enc',
+        sample_size=2000,
+        verbose=0,
+        )
+score['run_name'] = run_name
+summarise_scores([score])
+
+# %%
+run_name = 'test-latent-15-ents-lw0.5-rw1.0-z-Kmeans-2'
+print('-'*50)
+print(f"{run_name}")
+print('-'*50)
+
+dc = None
+dc = DeepLatentCluster(
+    run_name,
+    {
+        'train_size':0,
+        "cluster": 'Kmeans',
+        "entity_count": 15,
+        "latent_weight": 0.5,
+        "reconstr_weight": 1.0,
+        "noise_factor": 0.0,
+        "head": "z",
+        "radius": 6,
+    })
+dc.train_model()
+score = dc.ev(
+        run_name,
+        head='z',
+        sample_size=2000,
+        verbose=0,
+        )
+score['run_name'] = run_name
+summarise_scores([score])
+
+# %%
+
 
 
