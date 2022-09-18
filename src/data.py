@@ -182,7 +182,7 @@ def test_train_split(
         test_y_df,
         train_x_strings,
         train_x_shorts)
-    return res
+    return res # type: ignore
 
 
 def get_sentences_from_conll():
@@ -215,7 +215,7 @@ def pre_embed(dataset: str,
     elif dataset == "fewNERD":
         logging.info("Reading fewNERD dataset")
         sentences = read_fewNERD_sentences(length)
-    elif path.exists(dataset):
+    elif path.exists(dataset): # pylint: disable=no-member
         lines = read_conll_dataset(dataset)
         sentences = lines[:length]
     else:
@@ -223,7 +223,8 @@ def pre_embed(dataset: str,
     result = []
     logging.info("Making pipe")
 
-    from transformers import TFDistilBertModel 
+    # imported here as it takes a while to load and isn't always needed
+    from transformers import TFDistilBertModel # pylint: disable=import-outside-toplevel
     emb_pipe = get_pipe('distilbert-base-uncased', TFDistilBertModel)
 
     logging.info("Made pipe")
@@ -411,6 +412,10 @@ def load_data(
         allowed_y_list = [k for k,v in mapping.items() if v in entity_filter]
         trg = trg[trg['label'].isin(allowed_y_list)]
 
+    if not get_text:
+        # remove all unknowns
+        trg = trg[trg['label'] != 1]
+
     output(f'Loaded file: {trg.shape[0]} samples', verbose)
 
     x, _, y, _, strings, shorts = test_train_split(trg, oversample=oversample, verbose=verbose)
@@ -427,4 +432,4 @@ def load_data(
     y = np.unique(y, return_inverse = True)[1]
     output(filtered_map, verbose)
 
-    return x, y, filtered_map, strings, shorts
+    return x, y, filtered_map, strings, shorts # type: ignore
