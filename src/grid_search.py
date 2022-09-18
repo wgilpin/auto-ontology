@@ -25,6 +25,9 @@ def grid_search(
         signature: fn(config: dict, index: int) -> None
     :param n: int, number of times to repeat the evaluation
     """
+    # replace any single values with a list of length 1
+    config = {k: [v] if not isinstance(v, list) else v for k, v in config.items()}
+    # get all possible combinations of hyperparameter values
     params = list(config.keys())
 
     combos = [
