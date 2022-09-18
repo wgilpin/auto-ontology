@@ -1,3 +1,9 @@
+# Author: William Gilpin, 2022
+#
+# Derived in part from 
+#           https://github.com/parasdahal/deepclustering/blob/master/model.py
+#           Author: Dahal, P.
+
 import os
 import math
 from typing import Optional
@@ -157,19 +163,24 @@ class DeepLatentCluster():
         if self.verbose > 0:
             print(s)
 
-    def make_data(self, oversample: bool = True, train: bool = True) -> None:
+    def make_data(
+                self,
+                oversample: bool = True,
+                train: bool = True,
+                folder: Optional[str]=None) -> None:
         """
         Make data for training.
         - oversample: oversample the data to balance the classes
         - train: if True, make training data, otherwise make test data
         """
         self.output("Load Data")
-        self.x, self.y, self.mapping, self.strings = load_data(
+        self.x, self.y, self.mapping, self.strings, _ = load_data(
             self.config['train_size'],
             entity_filter=self.config['entities'],
             get_text=True,
             oversample=oversample,
             verbose=self.verbose,
+            folder=folder,
             radius=self.config['radius'],
             train=train)
         self.input_dim = self.x.shape[1]
@@ -356,14 +367,14 @@ class DeepLatentCluster():
                 raise ValueError(f"Unknown loss type {self.config['latent_loss']}")
         return loss
 
-    def train_model(self, verbose: int = 1) -> None:
+    def train_model(self, verbose: int = 1, folder: Optional[str] = None) -> None:
         """
         Run the model.
         """
         self.verbose = verbose
 
         if self.x is None:
-            self.make_data(oversample=True)
+            self.make_data(oversample=True, folder=folder)
             self.output("Data Loaded")
 
         if self.model is None:
@@ -497,7 +508,7 @@ class DeepLatentCluster():
         self.output(f"Loading model weights from {model_weights_file}")
         self.model.load_weights(model_weights_file)
 
-    def get_sample(self, sample_size: int) -> None:
+    def get_sample(self, sample_size: int, folder: Optional[str]=None) -> None:
         """
         Get a sample of the data
         """
@@ -507,6 +518,7 @@ class DeepLatentCluster():
                 0,
                 get_text=True,
                 verbose=self.verbose,
+                folder=folder,
                 train=False)
             self.output(f"Test Data Loaded {self.x.shape}")
 
@@ -623,6 +635,8 @@ class DeepLatentCluster():
                        load_dir: str,
                        sample_size: int,
                        head: str = "enc",
+                       folder: Optional[str]=None,
+                       output: Optional[str]=None,
                        verbose: int = 1) -> dict:
         """
         Run the model.
@@ -647,19 +661,32 @@ class DeepLatentCluster():
             'shorts': self.shorts_sample
         })
 
+        # create output folder if needed
+        if output is not None:
+            out_dir = f"./results/{output}"
+            if not os.path.exists(out_dir):
+                # create save dir
+                os.makedirs(out_dir)
+        else:
+            out_dir = self.save_dir
+
         assert self.mapping is not None
         return do_evaluation(
-            raw_sample, self.mapping, self.verbose, self.save_dir, self.run_name)
+            raw_sample, self.mapping, self.verbose, out_dir, self.run_name)
 
 
-    def benchmark_model(self, sample_size: int = 0, verbose: int = 1) -> None:
+    def benchmark_model(
+                    self,
+                    sample_size: int = 0,
+                    verbose: int = 1,
+                    folder: Optional[str]=None) -> None:
         """
         Run the clustering on sample data without runnin the model.
         """
         self.verbose = verbose
 
         # predict the requested sample size
-        self.get_sample(sample_size)
+        self.get_sample(sample_size, folder=folder)
 
         # cluster the latent space using requested algorithm
         y_pred_sample, _ = self.apply_cluster_algo(self.x_sample)
