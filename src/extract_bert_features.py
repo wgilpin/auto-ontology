@@ -15,9 +15,12 @@ _PIPE = None
 def get_pipe(
         name: str='distilbert-base-uncased',
         model_name: type=TFDistilBertModel) -> Pipeline:
+    """
+    Get or create the pipeline for extracting features from text.
+    """
     global _PIPE
     if _PIPE:
-            return _PIPE
+        return _PIPE
 
     model = model_name.from_pretrained(name)
     tokenizer = AutoTokenizer.from_pretrained(name)
