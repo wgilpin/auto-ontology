@@ -3,20 +3,18 @@
 import os
 import pickle
 from typing import Optional, Tuple
+import logging
 import pandas as pd
 import spacy
 import numpy as np
+from tqdm import tqdm
 from extract_bert_features import embed, get_pipe
 from transformers import TFDistilBertModel
-from tqdm import tqdm
 from data_conll import get_sample_conll
-from process_pdfs import useful
-
 
 from timer import timer
 from logging_helper import setup_logging
 
-import logging
 
 # %%
 # Setup
@@ -53,7 +51,9 @@ def merge_chunks_ents(document) -> list:
     out = []
     for chunk in document.noun_chunks:
         no_stops = remove_stop_words(chunk)
-        while (e_idx < len(ents)) and (ents[e_idx].start_char >= chunk.start_char) and (ents[e_idx].end_char <= chunk.end_char):
+        while (e_idx < len(ents)) and \
+              (ents[e_idx].start_char >= chunk.start_char) and \
+              (ents[e_idx].end_char <= chunk.end_char):
             # this entity is in the noun chunk
             # get the token index of the entity
             out.append({
@@ -290,7 +290,7 @@ class TrainingDataSpacy():
             # add any noun chunks and their entities
             if str(nc).lower() in self.skip_chunks:
                 continue
-            if not useful(str(nc)):
+            if not self.useful(str(nc)):
                 continue
             if str(nc).lower() in self.nlp.Defaults.stop_words:
                 continue
