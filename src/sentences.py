@@ -1,6 +1,5 @@
-# -*- coding: utf-8 -*-
-
-# from https://stackoverflow.com/a/31505798/2870929
+# with slight modifiactions from https://stackoverflow.com/a/31505798/2870929
+# posted by D. Greenberg
 
 import re
 ALPHABETS = "([A-Za-z])"
