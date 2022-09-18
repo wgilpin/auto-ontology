@@ -1,5 +1,13 @@
 import math
 import itertools as it
+from typing import Callable
+
+def make_name(config: dict) -> str:
+    """
+    Create a unique name for a hyperparameter configuration.
+    :param config: dict, hyperparameter configuration
+    """
+    return '_'.join([f'{k}-{v}' for k, v in config.items()])    
 
 def grid_search(
         config: dict,
