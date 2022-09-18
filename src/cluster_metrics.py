@@ -40,7 +40,7 @@ def cluster_acc(y_true, y_pred, y_pred_cluster):
     c_loss = sum([w[i, j] for i, j in ind]) * 1.0 / y_pred_cluster.size
     print(f"Cluster Loss {c_loss} on {y_pred_cluster.size} clusters")
     return c_loss
-    
+
 def cluster_loss(clustering:str, n_clusters: int):
     """
     Kearas loss function wrapper
@@ -52,7 +52,7 @@ def cluster_loss(clustering:str, n_clusters: int):
 
 def acc(y_true, y_pred):
     """
-    Calculate clustering accuracy. 
+    Calculate clustering accuracy.
 
     # Arguments
         y: true labels, numpy.array with shape `(n_samples,)`
@@ -197,7 +197,7 @@ def rearrange_clusters(
 
     clusters: ClusterList = {}
 
-    for clus_no in np.unique(sample['y_pred']): 
+    for clus_no in np.unique(sample['y_pred']):
         if clus_no < 0:
             continue
         cluster = sample[sample['y_pred'] == clus_no]
