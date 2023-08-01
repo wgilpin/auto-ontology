@@ -1,7 +1,7 @@
 # Finding semantic clusters
 
 For detailed descriptions and full references see 
-https://github.com/wgilpin/project/blob/master/ProjectReport.pdf
+[Final report](https://github.com/wgilpin/auto-ontology/blob/master/PROJ_GilpinW.pdf)
 
 To process a set of files:
 
